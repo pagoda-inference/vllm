@@ -257,8 +257,9 @@ def build_app(
         app.add_middleware(
             PagodaMiddleware,
             config=pagoda_cfg,
+            mass_client=pagoda_cfg.mass_client,
             trust_upstream_tenant_id=getattr(
-                args, "pagoda_trust_upstream_tenant_id", False
+                args, "pagoda_trust_upstream_tenant_id", True
             ),
         )
 

@@ -34,6 +34,12 @@ pagoda_tenant_concurrent_requests = Gauge(
     ["tenant_id"],
 )
 
+# MASS platform availability
+pagoda_mass_api_errors_total = Counter(
+    "pagoda_mass_api_errors_total",
+    "Total times MASS API was unavailable (served from stale cache or defaults)",
+)
+
 # Tool call repair
 pagoda_tool_call_repair_total = Counter(
     "pagoda_tool_call_repair_total",

@@ -12,6 +12,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from vllm.logger import init_logger
 from vllm.pagoda.config import PagodaConfig
+from vllm.pagoda.mass_client import MassApiClient
 from vllm.pagoda.metrics import pagoda_tenant_concurrent_requests
 from vllm.pagoda.queue_depth import QueueDepthTracker
 from vllm.pagoda.rate_limiter import TenantRateLimiter
@@ -31,14 +32,15 @@ class PagodaMiddleware:
         self,
         app: ASGIApp,
         config: PagodaConfig,
-        trust_upstream_tenant_id: bool = False,
+        mass_client: MassApiClient,
+        trust_upstream_tenant_id: bool = True,
     ) -> None:
         self.app = app
         self.config = config
         self.tenant_resolver = TenantResolver(
-            config, trust_upstream_tenant_id=trust_upstream_tenant_id
+            trust_upstream=trust_upstream_tenant_id
         )
-        self.rate_limiter = TenantRateLimiter(config)
+        self.rate_limiter = TenantRateLimiter(mass_client)
         queue_cfg = config.get_queue_config()
         self.queue_tracker = QueueDepthTracker(
             max_pending=queue_cfg.max_pending_requests,

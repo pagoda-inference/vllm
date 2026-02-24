@@ -1,0 +1,199 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""MASS platform API client with TTL cache and graceful degradation."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from dataclasses import dataclass
+from typing import Optional
+
+import aiohttp
+
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
+
+
+@dataclass
+class TenantConfig:
+    """Tenant configuration fetched from MASS platform."""
+    tenant_id: str
+    priority: str           # high | normal | batch
+    qps_limit: float
+    concurrent_limit: int
+    kv_cache_block_quota: int
+
+
+@dataclass
+class CacheEntry:
+    """Cached tenant config with freshness tracking."""
+    config: TenantConfig
+    fetched_at: float       # time.time() when fetched
+    is_stale: bool = False  # True when serving from degraded cache
+
+
+class MassApiClient:
+    """Fetch tenant config from MASS platform with local TTL cache.
+
+    Degradation strategy when MASS is unavailable:
+    1. Serve from stale cache (up to stale_ttl_seconds)
+    2. Fall back to defaults
+    3. Rate-limited alerting to avoid log storms
+    """
+
+    def __init__(
+        self,
+        mass_api_url: str,
+        timeout_seconds: int = 2,
+        ttl_seconds: int = 300,
+        stale_ttl_seconds: int = 3600,
+        defaults: TenantConfig | None = None,
+    ) -> None:
+        self._mass_api_url = mass_api_url.rstrip("/")
+        self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        self._ttl = ttl_seconds
+        self._stale_ttl = stale_ttl_seconds
+        self._defaults = defaults
+
+        self._cache: dict[str, CacheEntry] = {}
+        self._lock = asyncio.Lock()
+
+        # Alert state: avoid log storms when MASS is down
+        self._mass_healthy = True
+        self._last_alert_time = 0.0
+        self._alert_interval = 60  # max one alert per 60s
+
+    async def get_tenant_config(self, tenant_id: str) -> TenantConfig:
+        """Get tenant config. Priority:
+        1. Local cache (not expired)
+        2. MASS platform API (cache miss or expired)
+        3. Stale cache (MASS unavailable)
+        4. Defaults
+        """
+        async with self._lock:
+            entry = self._cache.get(tenant_id)
+            now = time.time()
+
+            # Cache hit and fresh
+            if entry and (now - entry.fetched_at) < self._ttl:
+                return entry.config
+
+            # Cache miss or expired — try MASS
+            config = await self._fetch_from_mass(tenant_id)
+
+            if config is not None:
+                self._cache[tenant_id] = CacheEntry(
+                    config=config,
+                    fetched_at=now,
+                    is_stale=False,
+                )
+                if not self._mass_healthy:
+                    logger.info(
+                        "MASS platform recovered, tenant config cache "
+                        "refreshing."
+                    )
+                    self._mass_healthy = True
+                return config
+
+            # MASS unavailable — try stale cache
+            if entry and (now - entry.fetched_at) < self._stale_ttl:
+                self._alert_mass_unavailable(tenant_id)
+                entry.is_stale = True
+                return entry.config
+
+            # Stale cache also expired — use defaults
+            self._alert_mass_unavailable(tenant_id)
+            logger.warning(
+                "No valid cache for tenant %s, falling back to defaults.",
+                tenant_id,
+            )
+            return self._make_default_config(tenant_id)
+
+    async def _fetch_from_mass(
+        self, tenant_id: str
+    ) -> Optional[TenantConfig]:
+        """Fetch tenant config from MASS API. Returns None on failure."""
+        url = (
+            f"{self._mass_api_url}/internal/tenants/{tenant_id}/config"
+        )
+        try:
+            async with aiohttp.ClientSession(
+                timeout=self._timeout
+            ) as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return TenantConfig(
+                            tenant_id=tenant_id,
+                            priority=data.get(
+                                "priority", self._defaults.priority
+                            ),
+                            qps_limit=data.get(
+                                "qps_limit", self._defaults.qps_limit
+                            ),
+                            concurrent_limit=data.get(
+                                "concurrent_limit",
+                                self._defaults.concurrent_limit,
+                            ),
+                            kv_cache_block_quota=data.get(
+                                "kv_cache_block_quota",
+                                self._defaults.kv_cache_block_quota,
+                            ),
+                        )
+                    elif resp.status == 404:
+                        # Tenant not registered — use defaults, treat as OK
+                        logger.info(
+                            "Tenant %s not found in MASS, using defaults.",
+                            tenant_id,
+                        )
+                        return self._make_default_config(tenant_id)
+                    else:
+                        logger.warning(
+                            "MASS API returned %d for tenant %s",
+                            resp.status,
+                            tenant_id,
+                        )
+                        return None
+        except asyncio.TimeoutError:
+            logger.warning(
+                "MASS API timeout for tenant %s", tenant_id
+            )
+            return None
+        except Exception as e:
+            logger.warning(
+                "MASS API error for tenant %s: %s", tenant_id, e
+            )
+            return None
+
+    def _alert_mass_unavailable(self, tenant_id: str) -> None:
+        """Rate-limited alert when MASS is down."""
+        now = time.time()
+        if (
+            self._mass_healthy
+            or (now - self._last_alert_time) > self._alert_interval
+        ):
+            logger.error(
+                "MASS platform unavailable, serving tenant configs from "
+                "stale cache. Triggered by tenant: %s",
+                tenant_id,
+            )
+            from vllm.pagoda.metrics import pagoda_mass_api_errors_total
+
+            pagoda_mass_api_errors_total.inc()
+            self._mass_healthy = False
+            self._last_alert_time = now
+
+    def _make_default_config(self, tenant_id: str) -> TenantConfig:
+        return TenantConfig(
+            tenant_id=tenant_id,
+            priority=self._defaults.priority,
+            qps_limit=self._defaults.qps_limit,
+            concurrent_limit=self._defaults.concurrent_limit,
+            kv_cache_block_quota=self._defaults.kv_cache_block_quota,
+        )
+
+    def invalidate(self, tenant_id: str) -> None:
+        """Invalidate cache for a tenant. For webhook-triggered refresh."""
+        self._cache.pop(tenant_id, None)

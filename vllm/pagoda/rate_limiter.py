@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Token-bucket QPS rate limiter + per-tenant concurrency limiter.
 
-Design: config and state are separated so hot-reload updates config
-parameters without destroying in-flight state.
+Design: config is fetched dynamically from MassApiClient (with TTL cache),
+so tenant limits update without restart.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 
 from vllm.logger import init_logger
-from vllm.pagoda.config import PagodaConfig
+from vllm.pagoda.mass_client import MassApiClient
 from vllm.pagoda.metrics import pagoda_rate_limit_rejected_total
 
 logger = init_logger(__name__)
@@ -34,7 +34,7 @@ class _TenantBucket:
     # Token bucket state
     tokens: float
     last_refill: float
-    # Config (can be hot-updated)
+    # Config (can be dynamically updated)
     qps_limit: float
     # Concurrency
     semaphore: asyncio.Semaphore
@@ -45,27 +45,47 @@ class _TenantBucket:
 
 
 class TenantRateLimiter:
-    """Per-tenant QPS + concurrency rate limiter."""
+    """Per-tenant QPS + concurrency rate limiter.
 
-    def __init__(self, config: PagodaConfig) -> None:
-        self._config = config
+    Fetches tenant config dynamically from MassApiClient on each acquire.
+    MassApiClient has its own TTL cache, so this doesn't hit MASS on every call.
+    """
+
+    def __init__(self, mass_client: MassApiClient) -> None:
+        self._mass_client = mass_client
         self._buckets: dict[str, _TenantBucket] = {}
         self._lock = asyncio.Lock()
 
-    def _get_or_create_bucket(self, tenant_id: str) -> _TenantBucket:
+    async def _get_or_create_bucket(
+        self, tenant_id: str
+    ) -> _TenantBucket:
         """Get existing bucket or create one from config. Must hold _lock."""
+        config = await self._mass_client.get_tenant_config(tenant_id)
+
         bucket = self._buckets.get(tenant_id)
-        if bucket is not None:
+        if bucket is None:
+            bucket = _TenantBucket(
+                tokens=config.qps_limit,  # start full
+                last_refill=time.monotonic(),
+                qps_limit=config.qps_limit,
+                semaphore=asyncio.Semaphore(config.concurrent_limit),
+            )
+            self._buckets[tenant_id] = bucket
             return bucket
 
-        tc = self._config.get_tenant_config(tenant_id)
-        bucket = _TenantBucket(
-            tokens=tc.qps_limit,  # start full
-            last_refill=time.monotonic(),
-            qps_limit=tc.qps_limit,
-            semaphore=asyncio.Semaphore(tc.concurrent_limit),
-        )
-        self._buckets[tenant_id] = bucket
+        # Config may have changed — sync to bucket
+        if bucket.qps_limit != config.qps_limit:
+            bucket.qps_limit = config.qps_limit
+        if bucket.concurrent_limit != config.concurrent_limit:
+            logger.info(
+                "Tenant %s concurrent_limit changed %d -> %d",
+                tenant_id,
+                bucket.concurrent_limit,
+                config.concurrent_limit,
+            )
+            bucket.semaphore = asyncio.Semaphore(config.concurrent_limit)
+            bucket.concurrent_limit = config.concurrent_limit
+
         return bucket
 
     async def acquire(self, tenant_id: str) -> RateLimitResult:
@@ -75,7 +95,7 @@ class TenantRateLimiter:
         The caller MUST call release() with the returned semaphore_ref.
         """
         async with self._lock:
-            bucket = self._get_or_create_bucket(tenant_id)
+            bucket = await self._get_or_create_bucket(tenant_id)
 
             # --- QPS token bucket ---
             now = time.monotonic()
@@ -98,7 +118,6 @@ class TenantRateLimiter:
                 )
 
             # --- Concurrency semaphore ---
-            # Snapshot the current semaphore before trying to acquire
             sem_ref = bucket.semaphore
             acquired = sem_ref._value > 0  # type: ignore[attr-defined]
             if not acquired:
@@ -127,29 +146,6 @@ class TenantRateLimiter:
         """Release the concurrency semaphore.
 
         MUST pass the same semaphore_ref returned by acquire() to ensure
-        correct release even after config hot-reload replaces the semaphore.
+        correct release even after config update replaces the semaphore.
         """
         semaphore_ref.release()
-
-    def reload_config(self) -> None:
-        """Update bucket configs from current PagodaConfig.
-
-        Called after config file reload. Updates config params in-place;
-        state (tokens, last_refill) is preserved.
-        """
-        for tenant_id, bucket in self._buckets.items():
-            tc = self._config.get_tenant_config(tenant_id)
-
-            # Update QPS limit — takes effect on next acquire()
-            bucket.qps_limit = tc.qps_limit
-
-            # Update concurrency limit — replace semaphore object
-            if tc.concurrent_limit != bucket.concurrent_limit:
-                logger.info(
-                    "Tenant %s concurrent_limit changed %d -> %d",
-                    tenant_id,
-                    bucket.concurrent_limit,
-                    tc.concurrent_limit,
-                )
-                bucket.semaphore = asyncio.Semaphore(tc.concurrent_limit)
-                bucket.concurrent_limit = tc.concurrent_limit
