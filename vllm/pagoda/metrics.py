@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Phase 1 Prometheus metrics for Pagoda multi-tenant features.
+"""Prometheus metrics for Pagoda multi-tenant features.
 
 Metrics are defined here and incremented in the relevant modules.
-The Prometheus endpoint exposure is deferred to Phase 4.
 """
 
 from prometheus_client import Counter, Gauge
@@ -47,7 +46,7 @@ pagoda_tool_call_repair_total = Counter(
     ["tenant_id", "model", "status"],  # status: success | repaired | failed
 )
 
-# Phase 2: KV cache quota metrics
+# KV cache quota metrics
 pagoda_quota_exceeded_total = Counter(
     "pagoda_quota_exceeded_total",
     "Total requests rejected due to KV cache block quota exceeded",
@@ -57,5 +56,36 @@ pagoda_quota_exceeded_total = Counter(
 pagoda_kv_cache_blocks_used = Gauge(
     "pagoda_kv_cache_blocks_used",
     "Current KV cache blocks used per tenant",
+    ["tenant_id"],
+)
+
+# KV cache offloading metrics
+pagoda_offload_blocks_used = Gauge(
+    "pagoda_offload_blocks_used",
+    "Current offloaded blocks per tenant and tier",
+    ["tenant_id", "tier"],  # tier: cpu, ssd
+)
+
+pagoda_offload_evictions_total = Counter(
+    "pagoda_offload_evictions_total",
+    "Total blocks evicted from offload cache per tenant",
+    ["tenant_id", "tier"],
+)
+
+pagoda_offload_stores_total = Counter(
+    "pagoda_offload_stores_total",
+    "Total blocks stored to offload cache per tenant",
+    ["tenant_id", "tier"],
+)
+
+pagoda_offload_hits_total = Counter(
+    "pagoda_offload_hits_total",
+    "Total offload cache lookup hits per tenant",
+    ["tenant_id"],
+)
+
+pagoda_offload_misses_total = Counter(
+    "pagoda_offload_misses_total",
+    "Total offload cache lookup misses per tenant",
     ["tenant_id"],
 )

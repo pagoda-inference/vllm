@@ -37,3 +37,17 @@ class CPULoadStoreSpec(BlockIDsLoadStoreSpec):
     @staticmethod
     def medium() -> str:
         return "CPU"
+
+
+class SSDLoadStoreSpec(BlockIDsLoadStoreSpec):
+    """
+    Spec for loading/storing a KV block to SSD storage.
+    """
+
+    def __init__(self, block_ids: list[int], file_paths: list[str]):
+        super().__init__(block_ids)
+        self.file_paths = file_paths
+
+    @staticmethod
+    def medium() -> str:
+        return "SSD"

@@ -85,7 +85,11 @@ class OffloadingManager(ABC):
         pass
 
     @abstractmethod
-    def prepare_load(self, block_hashes: Iterable[BlockHash]) -> LoadStoreSpec:
+    def prepare_load(
+        self,
+        block_hashes: Iterable[BlockHash],
+        tenant_id: str | None = None,
+    ) -> LoadStoreSpec:
         """
         Prepare the given blocks to be read.
         The given blocks will be protected from eviction until
@@ -94,6 +98,7 @@ class OffloadingManager(ABC):
 
         Args:
             block_hashes: the hashes identifying the blocks.
+            tenant_id: optional tenant identifier for multi-tenant tracking.
 
         Returns:
             A LoadStoreSpec that can be used by a worker to locate and load
@@ -122,7 +127,9 @@ class OffloadingManager(ABC):
 
     @abstractmethod
     def prepare_store(
-        self, block_hashes: Iterable[BlockHash]
+        self,
+        block_hashes: Iterable[BlockHash],
+        tenant_id: str | None = None,
     ) -> PrepareStoreOutput | None:
         """
         Prepare the given blocks to be offloaded.
@@ -131,6 +138,7 @@ class OffloadingManager(ABC):
 
         Args:
             block_hashes: the hashes identifying the blocks.
+            tenant_id: optional tenant identifier for multi-tenant tracking.
 
         Returns:
             A PrepareStoreOutput indicating which blocks need storing,

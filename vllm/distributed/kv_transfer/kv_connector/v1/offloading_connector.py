@@ -386,7 +386,9 @@ class OffloadingConnectorScheduler:
             request, start_idx=start_block_idx, end_idx=num_blocks
         )
 
-        src_spec = self.manager.prepare_load(block_hashes)
+        # Pass tenant_id to manager for tenant-aware offloading
+        tenant_id = getattr(request, "tenant_id", None)
+        src_spec = self.manager.prepare_load(block_hashes, tenant_id=tenant_id)
         dst_spec = GPULoadStoreSpec(block_ids[num_computed_gpu_blocks:])
 
         block_hashes = self._get_block_hashes(
@@ -430,7 +432,11 @@ class OffloadingConnectorScheduler:
             new_block_hashes = self._get_block_hashes(
                 req, start_idx=start_block_idx, end_idx=num_blocks
             )
-            store_output = self.manager.prepare_store(new_block_hashes)
+            # Pass tenant_id to manager for tenant-aware offloading
+            tenant_id = getattr(req, "tenant_id", None)
+            store_output = self.manager.prepare_store(
+                new_block_hashes, tenant_id=tenant_id
+            )
             if store_output is None:
                 logger.warning(
                     "Request %s: cannot store %s blocks", req_id, num_new_blocks

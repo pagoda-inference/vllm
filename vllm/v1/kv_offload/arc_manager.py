@@ -72,7 +72,11 @@ class ARCOffloadingManager(OffloadingManager):
             hit_count += 1
         return hit_count
 
-    def prepare_load(self, block_hashes: Iterable[BlockHash]) -> LoadStoreSpec:
+    def prepare_load(
+        self,
+        block_hashes: Iterable[BlockHash],
+        tenant_id: str | None = None,
+    ) -> LoadStoreSpec:
         blocks = []
         for block_hash in block_hashes:
             block = self.t1.get(block_hash) or self.t2.get(block_hash)
@@ -121,7 +125,9 @@ class ARCOffloadingManager(OffloadingManager):
             block.ref_cnt -= 1
 
     def prepare_store(
-        self, block_hashes: Iterable[BlockHash]
+        self,
+        block_hashes: Iterable[BlockHash],
+        tenant_id: str | None = None,
     ) -> PrepareStoreOutput | None:
         block_hashes_to_store = []
         for block_hash in block_hashes:

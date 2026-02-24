@@ -33,7 +33,11 @@ class LRUOffloadingManager(OffloadingManager):
             hit_count += 1
         return hit_count
 
-    def prepare_load(self, block_hashes: Iterable[BlockHash]) -> LoadStoreSpec:
+    def prepare_load(
+        self,
+        block_hashes: Iterable[BlockHash],
+        tenant_id: str | None = None,
+    ) -> LoadStoreSpec:
         blocks = []
         for block_hash in block_hashes:
             block = self.blocks[block_hash]
@@ -55,7 +59,9 @@ class LRUOffloadingManager(OffloadingManager):
             block.ref_cnt -= 1
 
     def prepare_store(
-        self, block_hashes: Iterable[BlockHash]
+        self,
+        block_hashes: Iterable[BlockHash],
+        tenant_id: str | None = None,
     ) -> PrepareStoreOutput | None:
         # filter out blocks that are already stored
         block_hashes_to_store = [
