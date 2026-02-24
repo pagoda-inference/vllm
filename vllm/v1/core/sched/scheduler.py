@@ -461,6 +461,29 @@ class Scheduler(SchedulerInterface):
                 req_index += 1
                 continue
 
+            # Pagoda: Check KV cache quota before allocation
+            if self.pagoda_enabled and request.tenant_id and request.tenant_config:
+                num_blocks_needed = self._estimate_blocks_needed(request, num_new_tokens)
+                quota = request.tenant_config.kv_cache_block_quota
+
+                if not self.pagoda_block_quota_manager.can_allocate(
+                    request.tenant_id, num_blocks_needed, quota
+                ):
+                    # Tenant exceeded quota - skip this request
+                    logger.warning(
+                        "Tenant %s exceeded KV cache block quota (%d/%d blocks)",
+                        request.tenant_id,
+                        self.pagoda_block_quota_manager.get_usage(request.tenant_id),
+                        quota,
+                    )
+                    # Increment metric
+                    from vllm.pagoda.metrics import pagoda_quota_exceeded_total
+                    pagoda_quota_exceeded_total.labels(tenant_id=request.tenant_id).inc()
+
+                    # Skip to next request (graceful degradation)
+                    req_index += 1
+                    continue
+
             # Schedule newly needed KV blocks for the request.
             with record_function_or_nullcontext("schedule: allocate_slots"):
                 while True:
@@ -472,6 +495,15 @@ class Scheduler(SchedulerInterface):
 
                     if new_blocks is not None:
                         # The request can be scheduled.
+                        # Pagoda: Track block allocation
+                        if self.pagoda_enabled and request.tenant_id:
+                            num_blocks = len(new_blocks.blocks[0]) if new_blocks.blocks else 0
+                            self.pagoda_block_quota_manager.allocate(request.tenant_id, num_blocks)
+                            # Update metric
+                            from vllm.pagoda.metrics import pagoda_kv_cache_blocks_used
+                            pagoda_kv_cache_blocks_used.labels(
+                                tenant_id=request.tenant_id
+                            ).set(self.pagoda_block_quota_manager.get_usage(request.tenant_id))
                         break
 
                     # The request cannot be scheduled.
@@ -757,6 +789,30 @@ class Scheduler(SchedulerInterface):
                         for i in encoder_inputs_to_schedule
                     )
 
+                # Pagoda: Check KV cache quota before allocation
+                if self.pagoda_enabled and request.tenant_id and request.tenant_config:
+                    num_blocks_needed = self._estimate_blocks_needed(request, num_new_tokens)
+                    quota = request.tenant_config.kv_cache_block_quota
+
+                    if not self.pagoda_block_quota_manager.can_allocate(
+                        request.tenant_id, num_blocks_needed, quota
+                    ):
+                        # Tenant exceeded quota - skip this request
+                        logger.warning(
+                            "Tenant %s exceeded KV cache block quota (%d/%d blocks)",
+                            request.tenant_id,
+                            self.pagoda_block_quota_manager.get_usage(request.tenant_id),
+                            quota,
+                        )
+                        # Increment metric
+                        from vllm.pagoda.metrics import pagoda_quota_exceeded_total
+                        pagoda_quota_exceeded_total.labels(tenant_id=request.tenant_id).inc()
+
+                        # Skip to next request (graceful degradation)
+                        self.waiting.pop_request()
+                        skipped_waiting_requests.prepend_request(request)
+                        continue
+
                 new_blocks = self.kv_cache_manager.allocate_slots(
                     request,
                     num_new_tokens,
@@ -776,6 +832,16 @@ class Scheduler(SchedulerInterface):
                     if request.has_encoder_inputs:
                         self.encoder_cache_manager.free(request)
                     break
+
+                # Pagoda: Track block allocation for waiting requests
+                if self.pagoda_enabled and request.tenant_id:
+                    num_blocks = len(new_blocks.blocks[0]) if new_blocks.blocks else 0
+                    self.pagoda_block_quota_manager.allocate(request.tenant_id, num_blocks)
+                    # Update metric
+                    from vllm.pagoda.metrics import pagoda_kv_cache_blocks_used
+                    pagoda_kv_cache_blocks_used.labels(
+                        tenant_id=request.tenant_id
+                    ).set(self.pagoda_block_quota_manager.get_usage(request.tenant_id))
 
                 # KVTransfer: the connector uses this info to determine
                 # if a load is needed. Note that
@@ -952,6 +1018,27 @@ class Scheduler(SchedulerInterface):
         assert request.status == RequestStatus.RUNNING, (
             "Only running requests can be preempted"
         )
+
+        # Pagoda: Release KV cache blocks for tenant quota tracking before freeing
+        if self.pagoda_enabled and request.tenant_id:
+            try:
+                blocks = self.kv_cache_manager.get_blocks(request.request_id)
+                num_blocks = len(blocks.blocks[0]) if blocks.blocks else 0
+                if num_blocks > 0:
+                    self.pagoda_block_quota_manager.release(request.tenant_id, num_blocks)
+                    # Update metric
+                    from vllm.pagoda.metrics import pagoda_kv_cache_blocks_used
+                    pagoda_kv_cache_blocks_used.labels(
+                        tenant_id=request.tenant_id
+                    ).set(self.pagoda_block_quota_manager.get_usage(request.tenant_id))
+                    logger.debug(
+                        "Released %d blocks for preempted request %s (tenant %s)",
+                        num_blocks, request.request_id, request.tenant_id
+                    )
+            except Exception as e:
+                logger.warning("Failed to release Pagoda quota for preempted request %s: %s",
+                             request.request_id, e)
+
         self.kv_cache_manager.free(request)
         self.encoder_cache_manager.free(request)
         request.status = RequestStatus.PREEMPTED
@@ -1801,6 +1888,24 @@ class Scheduler(SchedulerInterface):
 
     def _free_blocks(self, request: Request):
         assert request.is_finished()
+
+        # Pagoda: Release KV cache blocks for tenant quota tracking
+        if self.pagoda_enabled and request.tenant_id:
+            # Get number of blocks before freeing
+            try:
+                blocks = self.kv_cache_manager.get_blocks(request.request_id)
+                num_blocks = len(blocks.blocks[0]) if blocks.blocks else 0
+                if num_blocks > 0:
+                    self.pagoda_block_quota_manager.release(request.tenant_id, num_blocks)
+                    # Update metric
+                    from vllm.pagoda.metrics import pagoda_kv_cache_blocks_used
+                    pagoda_kv_cache_blocks_used.labels(
+                        tenant_id=request.tenant_id
+                    ).set(self.pagoda_block_quota_manager.get_usage(request.tenant_id))
+            except Exception as e:
+                logger.warning("Failed to release Pagoda quota for request %s: %s",
+                             request.request_id, e)
+
         self.kv_cache_manager.free(request)
         del self.requests[request.request_id]
 
@@ -2250,6 +2355,16 @@ class Scheduler(SchedulerInterface):
         return sync_failed_req_ids
 
     # ---- Pagoda multi-tenant scheduler helpers ----
+
+    def _estimate_blocks_needed(self, request: Request, num_new_tokens: int) -> int:
+        """Estimate the number of new KV cache blocks needed for a request.
+
+        Uses the cache block size to calculate how many blocks the new tokens
+        will require. This is a conservative estimate used for quota checking
+        before the actual allocation.
+        """
+        block_size = self.cache_config.block_size
+        return (num_new_tokens + block_size - 1) // block_size
 
     def _pagoda_prepare_request(self, request: Request) -> None:
         """Assign length bucket and predicted output length for Pagoda
