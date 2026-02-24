@@ -247,6 +247,21 @@ def build_app(
         allow_headers=args.allowed_headers,
     )
 
+    # --- Pagoda multi-tenant middleware ---
+    if getattr(args, "pagoda_config", None):
+        from vllm.pagoda.config import PagodaConfig
+        from vllm.pagoda.middleware import PagodaMiddleware
+
+        pagoda_cfg = PagodaConfig(args.pagoda_config)
+        app.state.pagoda_config = pagoda_cfg
+        app.add_middleware(
+            PagodaMiddleware,
+            config=pagoda_cfg,
+            trust_upstream_tenant_id=getattr(
+                args, "pagoda_trust_upstream_tenant_id", False
+            ),
+        )
+
     app.exception_handler(HTTPException)(http_exception_handler)
     app.exception_handler(RequestValidationError)(validation_exception_handler)
 
@@ -377,6 +392,21 @@ async def init_app_state(
 
     state.enable_server_load_tracking = args.enable_server_load_tracking
     state.server_load_metrics = 0
+
+    # --- Pagoda prompt template manager and tool call postprocessor ---
+    if getattr(args, "pagoda_config", None):
+        from vllm.pagoda.prompt_template_manager import PromptTemplateManager
+        from vllm.pagoda.tool_call_postprocessor import ToolCallPostProcessor
+
+        pagoda_cfg = getattr(state, "pagoda_config", None)
+        if pagoda_cfg is None:
+            from vllm.pagoda.config import PagodaConfig
+
+            pagoda_cfg = PagodaConfig(args.pagoda_config)
+            state.pagoda_config = pagoda_cfg
+
+        state.pagoda_prompt_template_manager = PromptTemplateManager(pagoda_cfg)
+        state.pagoda_tool_call_postprocessor = ToolCallPostProcessor()
 
 
 def create_server_socket(addr: tuple[str, int]) -> socket.socket:

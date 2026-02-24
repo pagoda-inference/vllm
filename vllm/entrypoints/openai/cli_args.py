@@ -215,6 +215,12 @@ class FrontendArgs:
     Enable offline FastAPI documentation for air-gapped environments.
     Uses vendored static assets bundled with vLLM.
     """
+    pagoda_config: str | None = None
+    """Path to pagoda_config.yaml for multi-tenant rate limiting,
+    queue depth protection, prompt templates, and tool call repair."""
+    pagoda_trust_upstream_tenant_id: bool = False
+    """Trust X-Tenant-ID header from upstream gateway instead of
+    resolving tenant from API key."""
 
     @staticmethod
     def add_cli_args(parser: FlexibleArgumentParser) -> FlexibleArgumentParser:

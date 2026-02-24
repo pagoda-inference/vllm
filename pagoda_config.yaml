@@ -1,0 +1,32 @@
+# Pagoda multi-tenant configuration for vLLM
+# Pass to vLLM with: --pagoda-config pagoda_config.yaml
+
+# API key → tenant_id mapping
+# Used when NOT using --pagoda-trust-upstream-tenant-id
+api_keys:
+  sk-tenant-abc-key1: tenant_abc
+  sk-tenant-xyz-key2: tenant_xyz
+
+# Default limits for tenants not explicitly configured
+defaults:
+  priority: normal
+  qps_limit: 10.0
+  concurrent_limit: 5
+  # prompt_template: "You are a helpful assistant for ${tenant_id}."
+
+# Per-tenant overrides
+tenants:
+  tenant_abc:
+    priority: high
+    qps_limit: 50.0
+    concurrent_limit: 20
+    prompt_template: "You are a helpful assistant. Today is ${date}."
+  tenant_xyz:
+    priority: normal
+    qps_limit: 10.0
+    concurrent_limit: 5
+
+# Global queue depth protection
+queue:
+  max_pending_requests: 1000
+  warn_threshold_pct: 0.8
