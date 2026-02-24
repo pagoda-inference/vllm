@@ -21,6 +21,17 @@ class QueueConfig:
     warn_threshold_pct: float = 0.8
 
 
+@dataclass
+class SchedulerConfig:
+    """Scheduler configuration for multi-tenant priority scheduling."""
+    batch_max_wait_seconds: float = 30.0
+    length_buckets: list[int] = None
+
+    def __post_init__(self):
+        if self.length_buckets is None:
+            self.length_buckets = [64, 256, 1024, 4096]
+
+
 class PagodaConfig:
     """Load pagoda_config.yaml and initialize MassApiClient."""
 
@@ -46,6 +57,15 @@ class PagodaConfig:
             warn_threshold_pct=float(
                 queue_raw.get("warn_threshold_pct", 0.8)
             ),
+        )
+
+        # Parse scheduler config
+        scheduler_raw = raw.get("scheduler", {})
+        self.scheduler = SchedulerConfig(
+            batch_max_wait_seconds=float(
+                scheduler_raw.get("batch_max_wait_seconds", 30.0)
+            ),
+            length_buckets=scheduler_raw.get("length_buckets", [64, 256, 1024, 4096]),
         )
 
         # Parse defaults for fallback
@@ -75,3 +95,7 @@ class PagodaConfig:
     def get_queue_config(self) -> QueueConfig:
         """Get queue depth config."""
         return self.queue
+
+    def get_scheduler_config(self) -> SchedulerConfig:
+        """Get scheduler config."""
+        return self.scheduler

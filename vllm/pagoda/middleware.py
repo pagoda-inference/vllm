@@ -64,10 +64,25 @@ class PagodaMiddleware:
         headers = Headers(scope=scope)
         tenant_id = self.tenant_resolver.resolve(headers)
 
-        # Store tenant_id in scope state for downstream access
+        # Resolve tenant config (priority) from MASS
+        tenant_priority_str: str | None = None
+        if tenant_id:
+            try:
+                tenant_config = await self.rate_limiter._client.get_tenant_config(
+                    tenant_id
+                )
+                tenant_priority_str = tenant_config.priority
+            except Exception:
+                logger.warning(
+                    "Failed to fetch tenant config for %s, using default priority",
+                    tenant_id,
+                )
+
+        # Store tenant_id and priority in scope state for downstream access
         if "state" not in scope:
             scope["state"] = {}
         scope["state"]["pagoda_tenant_id"] = tenant_id
+        scope["state"]["pagoda_tenant_priority"] = tenant_priority_str
 
         # --- Rate limiting ---
         result = await self.rate_limiter.acquire(tenant_id)

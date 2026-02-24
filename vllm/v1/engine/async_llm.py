@@ -300,6 +300,8 @@ class AsyncLLM(EngineClient):
         data_parallel_rank: int | None = None,
         prompt_text: str | None = None,
         reasoning_ended: bool | None = None,
+        tenant_id: str | None = None,
+        tenant_priority_str: str | None = None,
     ) -> RequestOutputCollector:
         """Add new request to the AsyncLLM."""
 
@@ -368,6 +370,11 @@ class AsyncLLM(EngineClient):
 
         if reasoning_ended is not None:
             request.reasoning_ended = reasoning_ended
+
+        if tenant_id is not None:
+            request.tenant_id = tenant_id
+        if tenant_priority_str is not None:
+            request.tenant_priority_str = tenant_priority_str
 
         self.input_processor.assign_request_id(request)
 
@@ -540,6 +547,8 @@ class AsyncLLM(EngineClient):
         priority: int = 0,
         data_parallel_rank: int | None = None,
         reasoning_ended: bool | None = None,
+        tenant_id: str | None = None,
+        tenant_priority_str: str | None = None,
     ) -> AsyncGenerator[RequestOutput, None]:
         """
         Main function called by the API server to kick off a request
@@ -569,6 +578,8 @@ class AsyncLLM(EngineClient):
                 data_parallel_rank=data_parallel_rank,
                 prompt_text=prompt_text,
                 reasoning_ended=reasoning_ended,
+                tenant_id=tenant_id,
+                tenant_priority_str=tenant_priority_str,
             )
 
             # The output_handler task pushes items into the queue.

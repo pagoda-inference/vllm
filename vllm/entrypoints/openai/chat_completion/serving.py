@@ -434,6 +434,13 @@ class OpenAIServingChat(OpenAIServing):
                         else None
                     )
 
+                    # Pagoda: extract tenant_id and priority from request state
+                    tenant_id = None
+                    tenant_priority_str = None
+                    if raw_request is not None:
+                        tenant_id = getattr(raw_request.state, "pagoda_tenant_id", None)
+                        tenant_priority_str = getattr(raw_request.state, "pagoda_tenant_priority", None)
+
                     generator = self.engine_client.generate(
                         engine_prompt,
                         sampling_params,
@@ -443,6 +450,8 @@ class OpenAIServingChat(OpenAIServing):
                         priority=request.priority,
                         data_parallel_rank=data_parallel_rank,
                         reasoning_ended=reasoning_ended,
+                        tenant_id=tenant_id,
+                        tenant_priority_str=tenant_priority_str,
                     )
 
                 generators.append(generator)

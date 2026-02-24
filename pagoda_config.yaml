@@ -21,3 +21,8 @@ defaults:
 queue:
   max_pending_requests: 1000
   warn_threshold_pct: 0.8
+
+# Phase 2: Scheduler configuration for multi-tenant priority scheduling
+scheduler:
+  batch_max_wait_seconds: 30          # Max wait before batch promoted to normal
+  length_buckets: [64, 256, 1024, 4096]  # Length bucket boundaries for batch grouping

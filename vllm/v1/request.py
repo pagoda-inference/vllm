@@ -74,6 +74,9 @@ class Request:
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
         resumable: bool = False,
         reasoning_ended: bool | None = None,
+        tenant_id: str | None = None,
+        tenant_priority_str: str | None = None,
+        tenant_config: Any | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -87,6 +90,14 @@ class Request:
         if self.structured_output_request is not None:
             self.structured_output_request.reasoning_ended = reasoning_ended
         self.arrival_time = arrival_time if arrival_time is not None else time.time()
+
+        # Pagoda multi-tenant fields
+        self.tenant_id = tenant_id
+        self.tenant_priority_str = tenant_priority_str
+        self.tenant_config = tenant_config
+        self.queued_at = time.time()
+        self.length_bucket = 0
+        self.predicted_output_len = 0
 
         self.status = RequestStatus.WAITING
         self.events: list[EngineCoreEvent] = []
@@ -210,6 +221,8 @@ class Request:
             block_hasher=block_hasher,
             resumable=request.resumable,
             reasoning_ended=request.reasoning_ended,
+            tenant_id=getattr(request, "tenant_id", None),
+            tenant_priority_str=getattr(request, "tenant_priority_str", None),
         )
 
     def append_output_token_ids(
@@ -292,11 +305,13 @@ class Request:
 
     def __lt__(self, other: "Request") -> bool:
         """
-        Compare two requests based on priority, arrival time, and request ID.
+        Compare two requests based on priority, length_bucket, arrival time, and request ID.
         Used in priority scheduling.
         """
         if self.priority != other.priority:
             return self.priority < other.priority
+        if self.length_bucket != other.length_bucket:
+            return self.length_bucket < other.length_bucket
         if self.arrival_time != other.arrival_time:
             return self.arrival_time < other.arrival_time
         if self.request_id != other.request_id:

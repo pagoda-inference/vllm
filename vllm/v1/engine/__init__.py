@@ -91,6 +91,10 @@ class EngineCoreRequest(
 
     reasoning_ended: bool | None = None
 
+    # Pagoda multi-tenant fields
+    tenant_id: str | None = None
+    tenant_priority_str: str | None = None
+
     @property
     def params(self) -> SamplingParams | PoolingParams:
         """Return the processed params (sampling or pooling)."""

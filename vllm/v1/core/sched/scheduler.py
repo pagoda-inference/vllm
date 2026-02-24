@@ -269,6 +269,36 @@ class Scheduler(SchedulerInterface):
 
         self._pause_state: PauseState = PauseState.UNPAUSED
 
+        # Pagoda multi-tenant scheduler extensions
+        self.pagoda_enabled = False
+        self.pagoda_block_quota_manager = None
+        self.pagoda_batch_max_wait_seconds = 30.0
+        try:
+            # Check if Pagoda config is available via environment or app state
+            # This will be set by the API server if --pagoda-config is provided
+            import os
+            pagoda_config_path = os.getenv("VLLM_PAGODA_CONFIG")
+            if pagoda_config_path:
+                from vllm.pagoda.config import PagodaConfig
+                from vllm.pagoda.block_quota_manager import BlockQuotaManager
+
+                pagoda_cfg = PagodaConfig(pagoda_config_path)
+                self.pagoda_enabled = True
+                self.pagoda_block_quota_manager = BlockQuotaManager()
+                self.pagoda_batch_max_wait_seconds = pagoda_cfg.scheduler.batch_max_wait_seconds
+
+                # Force priority scheduling when Pagoda is enabled
+                if self.policy != SchedulingPolicy.PRIORITY:
+                    logger.info(
+                        "Pagoda multi-tenant scheduling enabled, forcing policy=PRIORITY"
+                    )
+                    self.policy = SchedulingPolicy.PRIORITY
+                    self.waiting = create_request_queue(self.policy)
+
+                logger.info("Pagoda multi-tenant scheduler extensions enabled")
+        except Exception as e:
+            logger.warning("Failed to initialize Pagoda scheduler extensions: %s", e)
+
     def _mamba_block_aligned_split(
         self,
         request: Request,
@@ -544,6 +574,10 @@ class Scheduler(SchedulerInterface):
 
                 request = self.waiting.peek_request()
                 request_id = request.request_id
+
+                # Pagoda: check if batch-priority request should be promoted
+                if self.pagoda_enabled:
+                    self._pagoda_check_batch_promotion(request)
 
                 # KVTransfer: skip request if still waiting for remote kvs.
                 if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
@@ -1675,6 +1709,11 @@ class Scheduler(SchedulerInterface):
         else:
             if request.resumable:
                 request.streaming_queue = deque()
+
+            # Pagoda: assign length bucket and predicted output length
+            if self.pagoda_enabled:
+                self._pagoda_prepare_request(request)
+
             self.waiting.add_request(request)
             self.requests[request.request_id] = request
             if self.log_stats:
@@ -2209,3 +2248,37 @@ class Scheduler(SchedulerInterface):
         self.failed_recving_kv_req_ids |= async_failed_req_ids
         # Return sync affected IDs to skip in update_from_output
         return sync_failed_req_ids
+
+    # ---- Pagoda multi-tenant scheduler helpers ----
+
+    def _pagoda_prepare_request(self, request: Request) -> None:
+        """Assign length bucket and predicted output length for Pagoda
+        priority scheduling."""
+        from vllm.pagoda.length_predictor import (
+            assign_length_bucket,
+            predict_output_length,
+        )
+
+        predicted_len = predict_output_length(request.num_prompt_tokens)
+        request.predicted_output_len = predicted_len
+        request.length_bucket = assign_length_bucket(predicted_len)
+
+    def _pagoda_check_batch_promotion(self, request: Request) -> None:
+        """Check if a batch-priority request should be promoted.
+
+        When a request has been waiting longer than
+        ``pagoda_batch_max_wait_seconds``, its priority is boosted so it
+        will be scheduled in the next iteration regardless of its
+        original priority / length bucket.
+        """
+        from vllm.pagoda.scheduler_extensions import should_promote_batch_request
+
+        if should_promote_batch_request(request, self.pagoda_batch_max_wait_seconds):
+            # Promote to normal priority
+            request.priority = 100
+            request.tenant_priority_str = "normal"
+            logger.info(
+                "Promoted batch request %s to normal priority after %.1fs wait",
+                request.request_id,
+                time.time() - request.queued_at,
+            )

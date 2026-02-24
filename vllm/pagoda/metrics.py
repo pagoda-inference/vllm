@@ -46,3 +46,16 @@ pagoda_tool_call_repair_total = Counter(
     "Total tool call repair attempts",
     ["tenant_id", "model", "status"],  # status: success | repaired | failed
 )
+
+# Phase 2: KV cache quota metrics
+pagoda_quota_exceeded_total = Counter(
+    "pagoda_quota_exceeded_total",
+    "Total requests rejected due to KV cache block quota exceeded",
+    ["tenant_id"],
+)
+
+pagoda_kv_cache_blocks_used = Gauge(
+    "pagoda_kv_cache_blocks_used",
+    "Current KV cache blocks used per tenant",
+    ["tenant_id"],
+)

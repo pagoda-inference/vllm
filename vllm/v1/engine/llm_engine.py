@@ -223,6 +223,8 @@ class LLMEngine:
         trace_headers: Mapping[str, str] | None = None,
         priority: int = 0,
         prompt_text: str | None = None,
+        tenant_id: str | None = None,
+        tenant_priority_str: str | None = None,
     ) -> str:
         # Validate the request_id type.
         if not isinstance(request_id, str):
@@ -258,6 +260,15 @@ class LLMEngine:
             prompt_text, _, _ = extract_prompt_components(self.model_config, prompt)
 
         self.input_processor.assign_request_id(request)
+
+        # Pagoda: set tenant fields on request
+        if tenant_id is not None:
+            request.tenant_id = tenant_id
+            request.tenant_priority_str = tenant_priority_str
+            # Map tenant priority to scheduler priority
+            if tenant_priority_str:
+                from vllm.pagoda.scheduler_extensions import map_tenant_priority
+                request.priority = map_tenant_priority(tenant_priority_str)
 
         req_id = request.request_id
 
