@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Unified Pagoda ASGI middleware for rate limiting + queue depth."""
+"""Unified Pagoda ASGI middleware for rate limiting + queue depth + observability."""
 
 from __future__ import annotations
 
@@ -13,9 +13,19 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from vllm.logger import init_logger
 from vllm.pagoda.config import PagodaConfig
 from vllm.pagoda.mass_client import MassApiClient
-from vllm.pagoda.metrics import pagoda_tenant_concurrent_requests
+from vllm.pagoda.metrics import (
+    pagoda_request_latency_seconds,
+    pagoda_request_rejected_total,
+    pagoda_request_total,
+    pagoda_tenant_concurrent_requests,
+)
 from vllm.pagoda.queue_depth import QueueDepthTracker
 from vllm.pagoda.rate_limiter import TenantRateLimiter
+from vllm.pagoda.request_logger import (
+    PagodaRequestLog,
+    PagodaRequestLogger,
+    RequestTimer,
+)
 from vllm.pagoda.tenant import TenantResolver
 
 logger = init_logger(__name__)
@@ -46,6 +56,7 @@ class PagodaMiddleware:
             max_pending=queue_cfg.max_pending_requests,
             warn_pct=queue_cfg.warn_threshold_pct,
         )
+        self.request_logger = PagodaRequestLogger()
 
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send
@@ -87,6 +98,23 @@ class PagodaMiddleware:
         # --- Rate limiting ---
         result = await self.rate_limiter.acquire(tenant_id)
         if not result.allowed:
+            pagoda_request_rejected_total.labels(
+                tenant_id=tenant_id or "__unknown__",
+                reason=result.reason or "rate_limit",
+            ).inc()
+            pagoda_request_total.labels(
+                tenant_id=tenant_id or "__unknown__",
+                model="__unknown__",
+                status="rejected",
+            ).inc()
+            self.request_logger.log(PagodaRequestLog(
+                request_id=scope.get("state", {}).get("request_id", ""),
+                tenant_id=tenant_id or "__unknown__",
+                model="__unknown__",
+                priority=tenant_priority_str or "normal",
+                status="rejected",
+                error_reason=f"rate_limit:{result.reason}",
+            ))
             await self._send_error(
                 send,
                 status=429,
@@ -102,6 +130,23 @@ class PagodaMiddleware:
         if not self.queue_tracker.acquire():
             # Release rate limiter since we're rejecting
             await self.rate_limiter.release(tenant_id, result.semaphore_ref)
+            pagoda_request_rejected_total.labels(
+                tenant_id=tenant_id or "__unknown__",
+                reason="queue_full",
+            ).inc()
+            pagoda_request_total.labels(
+                tenant_id=tenant_id or "__unknown__",
+                model="__unknown__",
+                status="rejected",
+            ).inc()
+            self.request_logger.log(PagodaRequestLog(
+                request_id=scope.get("state", {}).get("request_id", ""),
+                tenant_id=tenant_id or "__unknown__",
+                model="__unknown__",
+                priority=tenant_priority_str or "normal",
+                status="rejected",
+                error_reason="queue_full",
+            ))
             await self._send_error(
                 send,
                 status=503,
@@ -113,13 +158,19 @@ class PagodaMiddleware:
             return
 
         # --- Process request with try/finally for guaranteed cleanup ---
+        timer = RequestTimer()
         pagoda_tenant_concurrent_requests.labels(
             tenant_id=tenant_id
         ).inc()
 
-        # Wrap send to inject X-Queue-Depth header
+        # Track response status from downstream
+        response_status: int = 200
+
+        # Wrap send to inject X-Queue-Depth header and capture status
         async def send_with_headers(message: Message) -> None:
+            nonlocal response_status
             if message["type"] == "http.response.start":
+                response_status = message.get("status", 200)
                 response_headers = MutableHeaders(scope=message)
                 response_headers.append(
                     "x-queue-depth", str(self.queue_tracker.current_depth)
@@ -130,8 +181,13 @@ class PagodaMiddleware:
             await send(message)
 
         try:
+            timer.mark_inference_start()
             await self.app(scope, receive, send_with_headers)
+        except Exception:
+            response_status = 500
+            raise
         finally:
+            timer.mark_done()
             await self.rate_limiter.release(
                 tenant_id, result.semaphore_ref
             )
@@ -139,6 +195,35 @@ class PagodaMiddleware:
             pagoda_tenant_concurrent_requests.labels(
                 tenant_id=tenant_id
             ).dec()
+
+            # Determine status label
+            status_label = (
+                "success" if 200 <= response_status < 400 else "error"
+            )
+            model = scope.get("state", {}).get("model", "__unknown__")
+
+            # Record metrics
+            pagoda_request_total.labels(
+                tenant_id=tenant_id or "__unknown__",
+                model=model,
+                status=status_label,
+            ).inc()
+            pagoda_request_latency_seconds.labels(
+                tenant_id=tenant_id or "__unknown__",
+                model=model,
+            ).observe(timer.total_ms / 1000.0)
+
+            # Emit structured log
+            self.request_logger.log(PagodaRequestLog(
+                request_id=scope.get("state", {}).get("request_id", ""),
+                tenant_id=tenant_id or "__unknown__",
+                model=model,
+                priority=tenant_priority_str or "normal",
+                total_ms=timer.total_ms,
+                queue_wait_ms=timer.queue_wait_ms,
+                inference_ms=timer.inference_ms,
+                status=status_label,
+            ))
 
     @staticmethod
     async def _send_error(
