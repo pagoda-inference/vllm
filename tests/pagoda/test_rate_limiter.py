@@ -125,6 +125,41 @@ class TestTenantRateLimiter:
         r2 = await limiter.acquire("t2")
         assert r2.allowed is True
 
+    @pytest.mark.asyncio
+    @patch("vllm.pagoda.rate_limiter.pagoda_rate_limit_rejected_total")
+    async def test_user_id_passed_to_metric(self, mock_metric, mock_mass_client):
+        """user_id is forwarded to the rate limit metric labels."""
+        mock_mass_client.get_tenant_config = AsyncMock(
+            return_value=_make_tenant_config(qps_limit=1.0, concurrent_limit=100)
+        )
+        limiter = TenantRateLimiter(mock_mass_client)
+
+        # Exhaust the single token
+        r1 = await limiter.acquire("t1", user_id="u1")
+        assert r1.allowed is True
+
+        # Second call should be rejected and metric should include user_id
+        r2 = await limiter.acquire("t1", user_id="u1")
+        assert r2.allowed is False
+        mock_metric.labels.assert_called_with(
+            tenant_id="t1", user_id="u1", reason="qps_limit"
+        )
+
+    @pytest.mark.asyncio
+    @patch("vllm.pagoda.rate_limiter.pagoda_rate_limit_rejected_total")
+    async def test_user_id_none_defaults_to_empty(self, mock_metric, mock_mass_client):
+        """user_id=None is recorded as empty string in metrics."""
+        mock_mass_client.get_tenant_config = AsyncMock(
+            return_value=_make_tenant_config(qps_limit=1.0, concurrent_limit=100)
+        )
+        limiter = TenantRateLimiter(mock_mass_client)
+
+        await limiter.acquire("t1")  # exhaust token
+        await limiter.acquire("t1")  # rejected, no user_id
+        mock_metric.labels.assert_called_with(
+            tenant_id="t1", user_id="", reason="qps_limit"
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

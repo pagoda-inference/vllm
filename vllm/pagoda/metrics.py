@@ -16,14 +16,14 @@ from prometheus_client import Counter, Gauge, Histogram
 
 pagoda_request_total = Counter(
     "pagoda_request_total",
-    "Total requests by tenant, model, and status",
-    ["tenant_id", "model", "status"],  # status: success | error | rejected
+    "Total requests by tenant, user, model, and status",
+    ["tenant_id", "user_id", "model", "status"],  # status: success | error | rejected
 )
 
 pagoda_request_latency_seconds = Histogram(
     "pagoda_request_latency_seconds",
     "End-to-end request latency in seconds",
-    ["tenant_id", "model"],
+    ["tenant_id", "user_id", "model"],
     buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0),
 )
 
@@ -37,7 +37,7 @@ pagoda_request_queue_wait_seconds = Histogram(
 pagoda_request_rejected_total = Counter(
     "pagoda_request_rejected_total",
     "Total requests rejected (unified across all rejection reasons)",
-    ["tenant_id", "reason"],
+    ["tenant_id", "user_id", "reason"],
     # reason: qps_limit | queue_full | block_quota | preempted | concurrent_limit
 )
 
@@ -48,7 +48,7 @@ pagoda_request_rejected_total = Counter(
 pagoda_rate_limit_rejected_total = Counter(
     "pagoda_rate_limit_rejected_total",
     "Total requests rejected due to rate limit (429)",
-    ["tenant_id", "reason"],  # reason: qps_limit | concurrent_limit
+    ["tenant_id", "user_id", "reason"],  # reason: qps_limit | concurrent_limit
 )
 
 # ---------------------------------------------------------------------------
@@ -72,8 +72,8 @@ pagoda_queue_depth_current = Gauge(
 
 pagoda_tenant_concurrent_requests = Gauge(
     "pagoda_tenant_concurrent_requests",
-    "Current concurrent requests per tenant",
-    ["tenant_id"],
+    "Current concurrent requests per tenant and user",
+    ["tenant_id", "user_id"],
 )
 
 # ---------------------------------------------------------------------------

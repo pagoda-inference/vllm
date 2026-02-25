@@ -28,8 +28,9 @@ class PagodaRequestLog:
 
     request_id: str
     tenant_id: str
-    model: str
-    priority: str  # high | normal | batch
+    user_id: str | None = None
+    model: str = ""
+    priority: str = "normal"  # high | normal | batch
     prompt_tokens: int = 0
     output_tokens: int = 0
     queue_wait_ms: float = 0.0

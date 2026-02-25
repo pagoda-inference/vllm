@@ -88,12 +88,15 @@ class TenantRateLimiter:
 
         return bucket
 
-    async def acquire(self, tenant_id: str) -> RateLimitResult:
+    async def acquire(
+        self, tenant_id: str, user_id: str | None = None
+    ) -> RateLimitResult:
         """Try to acquire a rate-limit slot.
 
         Returns RateLimitResult with allowed=True and semaphore_ref on success.
         The caller MUST call release() with the returned semaphore_ref.
         """
+        uid = user_id or ""
         async with self._lock:
             bucket = await self._get_or_create_bucket(tenant_id)
 
@@ -109,7 +112,7 @@ class TenantRateLimiter:
             if bucket.tokens < 1.0:
                 retry_after = (1.0 - bucket.tokens) / bucket.qps_limit
                 pagoda_rate_limit_rejected_total.labels(
-                    tenant_id=tenant_id, reason="qps_limit"
+                    tenant_id=tenant_id, user_id=uid, reason="qps_limit"
                 ).inc()
                 return RateLimitResult(
                     allowed=False,
@@ -122,7 +125,7 @@ class TenantRateLimiter:
             acquired = sem_ref._value > 0  # type: ignore[attr-defined]
             if not acquired:
                 pagoda_rate_limit_rejected_total.labels(
-                    tenant_id=tenant_id, reason="concurrent_limit"
+                    tenant_id=tenant_id, user_id=uid, reason="concurrent_limit"
                 ).inc()
                 return RateLimitResult(
                     allowed=False,

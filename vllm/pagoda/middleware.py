@@ -73,13 +73,16 @@ class PagodaMiddleware:
 
         # --- Tenant resolution ---
         headers = Headers(scope=scope)
-        tenant_id = self.tenant_resolver.resolve(headers)
+        identity = self.tenant_resolver.resolve(headers)
+        tenant_id = identity.tenant_id
+        user_id = identity.user_id
+        uid = user_id or ""
 
         # Resolve tenant config (priority) from MASS
         tenant_priority_str: str | None = None
         if tenant_id:
             try:
-                tenant_config = await self.rate_limiter._client.get_tenant_config(
+                tenant_config = await self.rate_limiter._mass_client.get_tenant_config(
                     tenant_id
                 )
                 tenant_priority_str = tenant_config.priority
@@ -89,27 +92,31 @@ class PagodaMiddleware:
                     tenant_id,
                 )
 
-        # Store tenant_id and priority in scope state for downstream access
+        # Store tenant_id, user_id, and priority in scope state for downstream
         if "state" not in scope:
             scope["state"] = {}
         scope["state"]["pagoda_tenant_id"] = tenant_id
+        scope["state"]["pagoda_user_id"] = user_id
         scope["state"]["pagoda_tenant_priority"] = tenant_priority_str
 
         # --- Rate limiting ---
-        result = await self.rate_limiter.acquire(tenant_id)
+        result = await self.rate_limiter.acquire(tenant_id, user_id=user_id)
         if not result.allowed:
             pagoda_request_rejected_total.labels(
                 tenant_id=tenant_id or "__unknown__",
+                user_id=uid,
                 reason=result.reason or "rate_limit",
             ).inc()
             pagoda_request_total.labels(
                 tenant_id=tenant_id or "__unknown__",
+                user_id=uid,
                 model="__unknown__",
                 status="rejected",
             ).inc()
             self.request_logger.log(PagodaRequestLog(
                 request_id=scope.get("state", {}).get("request_id", ""),
                 tenant_id=tenant_id or "__unknown__",
+                user_id=user_id,
                 model="__unknown__",
                 priority=tenant_priority_str or "normal",
                 status="rejected",
@@ -132,16 +139,19 @@ class PagodaMiddleware:
             await self.rate_limiter.release(tenant_id, result.semaphore_ref)
             pagoda_request_rejected_total.labels(
                 tenant_id=tenant_id or "__unknown__",
+                user_id=uid,
                 reason="queue_full",
             ).inc()
             pagoda_request_total.labels(
                 tenant_id=tenant_id or "__unknown__",
+                user_id=uid,
                 model="__unknown__",
                 status="rejected",
             ).inc()
             self.request_logger.log(PagodaRequestLog(
                 request_id=scope.get("state", {}).get("request_id", ""),
                 tenant_id=tenant_id or "__unknown__",
+                user_id=user_id,
                 model="__unknown__",
                 priority=tenant_priority_str or "normal",
                 status="rejected",
@@ -160,7 +170,7 @@ class PagodaMiddleware:
         # --- Process request with try/finally for guaranteed cleanup ---
         timer = RequestTimer()
         pagoda_tenant_concurrent_requests.labels(
-            tenant_id=tenant_id
+            tenant_id=tenant_id, user_id=uid,
         ).inc()
 
         # Track response status from downstream
@@ -193,7 +203,7 @@ class PagodaMiddleware:
             )
             self.queue_tracker.release()
             pagoda_tenant_concurrent_requests.labels(
-                tenant_id=tenant_id
+                tenant_id=tenant_id, user_id=uid,
             ).dec()
 
             # Determine status label
@@ -205,11 +215,13 @@ class PagodaMiddleware:
             # Record metrics
             pagoda_request_total.labels(
                 tenant_id=tenant_id or "__unknown__",
+                user_id=uid,
                 model=model,
                 status=status_label,
             ).inc()
             pagoda_request_latency_seconds.labels(
                 tenant_id=tenant_id or "__unknown__",
+                user_id=uid,
                 model=model,
             ).observe(timer.total_ms / 1000.0)
 
@@ -217,6 +229,7 @@ class PagodaMiddleware:
             self.request_logger.log(PagodaRequestLog(
                 request_id=scope.get("state", {}).get("request_id", ""),
                 tenant_id=tenant_id or "__unknown__",
+                user_id=user_id,
                 model=model,
                 priority=tenant_priority_str or "normal",
                 total_ms=timer.total_ms,

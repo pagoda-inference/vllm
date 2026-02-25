@@ -42,7 +42,7 @@ def _make_middleware():
          patch("vllm.pagoda.middleware.PagodaRequestLogger"):
 
         mock_rl = AsyncMock()
-        mock_rl._client = mass_client
+        mock_rl._mass_client = mass_client
         mock_rl.acquire = AsyncMock(return_value=RateLimitResult(
             allowed=True, semaphore_ref=MagicMock(),
         ))
@@ -125,8 +125,6 @@ class TestPagodaMiddleware:
         # Verify response headers were injected
         start_msg = sent_messages[0]
         assert start_msg["type"] == "http.response.start"
-        # The middleware wraps send, so headers should include x-queue-depth
-        # and x-pagoda-tenant
 
     @pytest.mark.asyncio
     @patch("vllm.pagoda.middleware.pagoda_request_rejected_total")
@@ -184,8 +182,36 @@ class TestPagodaMiddleware:
         assert body["error"]["type"] == "server_error"
 
     @pytest.mark.asyncio
-    async def test_tenant_stored_in_scope_state(self):
-        """Tenant ID and priority are stored in scope state."""
+    async def test_tenant_and_user_stored_in_scope_state(self):
+        """Tenant ID, user_id, and priority are stored in scope state."""
+        mw = _make_middleware()
+        scope = _make_scope(headers={
+            "x-tenant-id": "acme",
+            "x-user-id": "user-7",
+        })
+        receive = AsyncMock()
+
+        async def fake_app(s, r, send_fn):
+            await send_fn({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send_fn({"type": "http.response.body", "body": b""})
+
+        mw.app = fake_app
+
+        with patch("vllm.pagoda.middleware.pagoda_request_total"), \
+             patch("vllm.pagoda.middleware.pagoda_request_latency_seconds"), \
+             patch("vllm.pagoda.middleware.pagoda_tenant_concurrent_requests"):
+            await mw(scope, receive, AsyncMock())
+
+        assert scope["state"]["pagoda_tenant_id"] == "acme"
+        assert scope["state"]["pagoda_user_id"] == "user-7"
+
+    @pytest.mark.asyncio
+    async def test_user_id_none_when_header_missing(self):
+        """user_id is None in scope state when X-User-ID header is absent."""
         mw = _make_middleware()
         scope = _make_scope(headers={"x-tenant-id": "acme"})
         receive = AsyncMock()
@@ -206,6 +232,38 @@ class TestPagodaMiddleware:
             await mw(scope, receive, AsyncMock())
 
         assert scope["state"]["pagoda_tenant_id"] == "acme"
+        assert scope["state"]["pagoda_user_id"] is None
+
+    @pytest.mark.asyncio
+    @patch("vllm.pagoda.middleware.pagoda_request_rejected_total")
+    @patch("vllm.pagoda.middleware.pagoda_request_total")
+    async def test_rate_limit_passes_user_id(self, mock_total, mock_rejected):
+        """Rate limiter acquire is called with user_id from header."""
+        mw = _make_middleware()
+        scope = _make_scope(headers={
+            "x-tenant-id": "acme",
+            "x-user-id": "user-7",
+        })
+        receive = AsyncMock()
+
+        async def fake_app(s, r, send_fn):
+            await send_fn({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send_fn({"type": "http.response.body", "body": b""})
+
+        mw.app = fake_app
+
+        with patch("vllm.pagoda.middleware.pagoda_request_total"), \
+             patch("vllm.pagoda.middleware.pagoda_request_latency_seconds"), \
+             patch("vllm.pagoda.middleware.pagoda_tenant_concurrent_requests"):
+            await mw(scope, receive, AsyncMock())
+
+        mw.rate_limiter.acquire.assert_awaited_once_with(
+            "acme", user_id="user-7"
+        )
 
 
 if __name__ == "__main__":

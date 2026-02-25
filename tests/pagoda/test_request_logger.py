@@ -56,6 +56,27 @@ class TestPagodaRequestLog:
         )
         assert log.timestamp == ts
 
+    def test_user_id_default_none(self):
+        """Test that user_id defaults to None."""
+        log = PagodaRequestLog(
+            request_id="req-1",
+            tenant_id="t-1",
+            model="m",
+            priority="normal",
+        )
+        assert log.user_id is None
+
+    def test_user_id_set(self):
+        """Test that user_id can be set explicitly."""
+        log = PagodaRequestLog(
+            request_id="req-1",
+            tenant_id="t-1",
+            model="m",
+            priority="normal",
+            user_id="user-42",
+        )
+        assert log.user_id == "user-42"
+
 
 class TestPagodaRequestLogger:
     """Tests for the PagodaRequestLogger."""
@@ -119,6 +140,39 @@ class TestPagodaRequestLogger:
 
         data = json.loads(caplog.records[0].message)
         assert data["error_reason"] == "rate_limit:qps_limit"
+
+    def test_user_id_included_in_json(self, caplog):
+        """Test that user_id appears in JSON output when set."""
+        logger_inst = PagodaRequestLogger(logger_name="test.request_log_4")
+        entry = PagodaRequestLog(
+            request_id="req-1",
+            tenant_id="t-1",
+            model="m",
+            priority="normal",
+            user_id="user-42",
+        )
+
+        with caplog.at_level(logging.INFO, logger="test.request_log_4"):
+            logger_inst.log(entry)
+
+        data = json.loads(caplog.records[0].message)
+        assert data["user_id"] == "user-42"
+
+    def test_user_id_omitted_when_none(self, caplog):
+        """Test that user_id is omitted from JSON when None."""
+        logger_inst = PagodaRequestLogger(logger_name="test.request_log_5")
+        entry = PagodaRequestLog(
+            request_id="req-1",
+            tenant_id="t-1",
+            model="m",
+            priority="normal",
+        )
+
+        with caplog.at_level(logging.INFO, logger="test.request_log_5"):
+            logger_inst.log(entry)
+
+        data = json.loads(caplog.records[0].message)
+        assert "user_id" not in data
 
 
 class TestRequestTimer:
