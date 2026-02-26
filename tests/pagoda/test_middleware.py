@@ -265,6 +265,58 @@ class TestPagodaMiddleware:
             "acme", user_id="user-7"
         )
 
+    @pytest.mark.asyncio
+    @patch("vllm.pagoda.middleware.pagoda_request_total")
+    @patch("vllm.pagoda.middleware.pagoda_request_latency_seconds")
+    @patch("vllm.pagoda.middleware.pagoda_tenant_concurrent_requests")
+    async def test_app_exception_releases_resources_and_reraises(
+        self, mock_conc, mock_lat, mock_total
+    ):
+        """Unhandled app exception releases rate limiter + queue, then re-raises."""
+        mw = _make_middleware()
+        scope = _make_scope(headers={"x-tenant-id": "acme"})
+        receive = AsyncMock()
+
+        async def exploding_app(s, r, send_fn):
+            raise RuntimeError("boom")
+
+        mw.app = exploding_app
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await mw(scope, receive, AsyncMock())
+
+        # Rate limiter and queue tracker should have been released
+        mw.rate_limiter.release.assert_awaited_once()
+        mw.queue_tracker.release.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("vllm.pagoda.middleware.pagoda_request_total")
+    @patch("vllm.pagoda.middleware.pagoda_request_latency_seconds")
+    @patch("vllm.pagoda.middleware.pagoda_tenant_concurrent_requests")
+    async def test_successful_request_releases_exactly_once(
+        self, mock_conc, mock_lat, mock_total
+    ):
+        """Normal request releases rate limiter and queue exactly once."""
+        mw = _make_middleware()
+        scope = _make_scope(headers={"x-tenant-id": "acme"})
+        receive = AsyncMock()
+
+        async def fake_app(s, r, send_fn):
+            await send_fn({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send_fn({"type": "http.response.body", "body": b""})
+
+        mw.app = fake_app
+
+        await mw(scope, receive, AsyncMock())
+
+        # Exactly one release call each
+        mw.rate_limiter.release.assert_awaited_once()
+        mw.queue_tracker.release.assert_called_once()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

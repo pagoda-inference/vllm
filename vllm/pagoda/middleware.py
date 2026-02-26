@@ -78,19 +78,9 @@ class PagodaMiddleware:
         user_id = identity.user_id
         uid = sanitize_metric_label(user_id)
 
-        # Resolve tenant config (priority) from MASS
-        tenant_priority_str: str | None = None
-        if tenant_id:
-            try:
-                tenant_config = await self.rate_limiter._mass_client.get_tenant_config(
-                    tenant_id
-                )
-                tenant_priority_str = tenant_config.priority
-            except Exception:
-                logger.warning(
-                    "Failed to fetch tenant config for %s, using default priority",
-                    tenant_id,
-                )
+        # --- Rate limiting (also fetches tenant priority from MASS) ---
+        result = await self.rate_limiter.acquire(tenant_id, user_id=user_id)
+        tenant_priority_str = result.priority
 
         # Store tenant_id, user_id, and priority in scope state for downstream
         if "state" not in scope:
@@ -99,8 +89,6 @@ class PagodaMiddleware:
         scope["state"]["pagoda_user_id"] = user_id
         scope["state"]["pagoda_tenant_priority"] = tenant_priority_str
 
-        # --- Rate limiting ---
-        result = await self.rate_limiter.acquire(tenant_id, user_id=user_id)
         if not result.allowed:
             pagoda_request_rejected_total.labels(
                 tenant_id=tenant_id or "__unknown__",
@@ -175,6 +163,7 @@ class PagodaMiddleware:
 
         # Track response status from downstream
         response_status: int = 200
+        released = False
 
         # Wrap send to inject X-Queue-Depth header and capture status
         async def send_with_headers(message: Message) -> None:
@@ -195,13 +184,20 @@ class PagodaMiddleware:
             await self.app(scope, receive, send_with_headers)
         except Exception:
             response_status = 500
+            logger.exception(
+                "Unhandled error processing request for tenant=%s user=%s",
+                tenant_id,
+                user_id,
+            )
             raise
         finally:
             timer.mark_done()
-            await self.rate_limiter.release(
-                tenant_id, result.semaphore_ref
-            )
-            self.queue_tracker.release()
+            if not released:
+                released = True
+                await self.rate_limiter.release(
+                    tenant_id, result.semaphore_ref
+                )
+                self.queue_tracker.release()
             pagoda_tenant_concurrent_requests.labels(
                 tenant_id=tenant_id, user_id=uid,
             ).dec()

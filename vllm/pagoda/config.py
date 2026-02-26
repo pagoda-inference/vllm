@@ -1,6 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Pagoda configuration management with YAML loading."""
+"""Pagoda configuration management with YAML loading.
+
+Configuration priority (highest to lowest):
+  1. Values specified in the YAML config file (``pagoda_config.yaml``).
+  2. Dataclass field defaults (``QueueConfig``, ``SchedulerConfig``,
+     ``TenantConfig``).
+  3. On file-not-found or YAML parse error the loader falls back to an
+     empty dict, so all values resolve to their dataclass defaults and
+     a warning is logged.
+"""
 
 from __future__ import annotations
 

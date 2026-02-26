@@ -27,6 +27,7 @@ class RateLimitResult:
     retry_after: float | None = None
     reason: str | None = None  # "qps_limit" | "concurrent_limit"
     semaphore_ref: asyncio.Semaphore | None = None
+    priority: str | None = None  # tenant priority from MASS config
 
 
 @dataclass
@@ -96,9 +97,14 @@ class TenantRateLimiter:
 
         Returns RateLimitResult with allowed=True and semaphore_ref on success.
         The caller MUST call release() with the returned semaphore_ref.
+        The result also carries the tenant's priority string from MASS config,
+        so callers don't need a separate get_tenant_config() call.
         """
         uid = sanitize_metric_label(user_id)
         async with self._lock:
+            config = await self._mass_client.get_tenant_config(tenant_id)
+            priority = config.priority
+
             bucket = await self._get_or_create_bucket(tenant_id)
 
             # --- QPS token bucket ---
@@ -119,6 +125,7 @@ class TenantRateLimiter:
                     allowed=False,
                     retry_after=retry_after,
                     reason="qps_limit",
+                    priority=priority,
                 )
 
             # --- Concurrency semaphore ---
@@ -132,6 +139,7 @@ class TenantRateLimiter:
                     allowed=False,
                     retry_after=1.0,
                     reason="concurrent_limit",
+                    priority=priority,
                 )
 
             # Consume 1 QPS token
@@ -142,6 +150,7 @@ class TenantRateLimiter:
         return RateLimitResult(
             allowed=True,
             semaphore_ref=sem_ref,
+            priority=priority,
         )
 
     async def release(

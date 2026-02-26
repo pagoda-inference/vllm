@@ -126,6 +126,29 @@ class TestBlockQuotaManager:
             "tenant-1", num_blocks=1, quota=100
         )
 
+    def test_try_allocate_success(self):
+        """Test try_allocate succeeds within quota and updates usage."""
+        assert self.manager.try_allocate("tenant-1", num_blocks=10, quota=100)
+        assert self.manager.get_usage("tenant-1") == 10
+
+    def test_try_allocate_failure(self):
+        """Test try_allocate fails when exceeding quota without side effects."""
+        self.manager.allocate("tenant-1", num_blocks=90)
+        assert not self.manager.try_allocate(
+            "tenant-1", num_blocks=20, quota=100
+        )
+        # Usage unchanged
+        assert self.manager.get_usage("tenant-1") == 90
+
+    def test_try_allocate_exact_quota(self):
+        """Test try_allocate at exact quota boundary."""
+        assert self.manager.try_allocate("tenant-1", num_blocks=100, quota=100)
+        assert self.manager.get_usage("tenant-1") == 100
+        # One more should fail
+        assert not self.manager.try_allocate(
+            "tenant-1", num_blocks=1, quota=100
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

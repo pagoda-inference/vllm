@@ -98,7 +98,7 @@ class MassApiClient:
         # Alert state: avoid log storms when MASS is down
         self._mass_healthy = True
         self._last_alert_time = 0.0
-        self._alert_interval = 60  # max one alert per 60s
+        self._alert_interval = 300  # max one alert per 300s
 
     async def get_tenant_config(self, tenant_id: str) -> TenantConfig:
         """Get tenant config. Priority:
@@ -147,9 +147,12 @@ class MassApiClient:
             return self._make_default_config(tenant_id)
 
     async def _fetch_from_mass(
-        self, tenant_id: str
+        self, tenant_id: str, max_retries: int = 2
     ) -> Optional[TenantConfig]:
-        """Fetch tenant config from MASS API. Returns None on failure."""
+        """Fetch tenant config from MASS API with exponential backoff.
+
+        Returns None on failure after all retries exhausted.
+        """
         url = (
             f"{self._mass_api_url}/internal/tenants/{tenant_id}/config"
         )
@@ -162,55 +165,80 @@ class MassApiClient:
             if self._ssl_context
             else None
         )
-        try:
-            async with aiohttp.ClientSession(
-                timeout=self._timeout,
-                connector=connector,
-            ) as session:
-                async with session.get(url, headers=req_headers) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return TenantConfig(
-                            tenant_id=tenant_id,
-                            priority=data.get(
-                                "priority", self._defaults.priority
-                            ),
-                            qps_limit=data.get(
-                                "qps_limit", self._defaults.qps_limit
-                            ),
-                            concurrent_limit=data.get(
-                                "concurrent_limit",
-                                self._defaults.concurrent_limit,
-                            ),
-                            kv_cache_block_quota=data.get(
-                                "kv_cache_block_quota",
-                                self._defaults.kv_cache_block_quota,
-                            ),
-                        )
-                    elif resp.status == 404:
-                        # Tenant not registered — use defaults, treat as OK
-                        logger.info(
-                            "Tenant %s not found in MASS, using defaults.",
-                            tenant_id,
-                        )
-                        return self._make_default_config(tenant_id)
-                    else:
-                        logger.warning(
-                            "MASS API returned %d for tenant %s",
-                            resp.status,
-                            tenant_id,
-                        )
-                        return None
-        except asyncio.TimeoutError:
-            logger.warning(
-                "MASS API timeout for tenant %s", tenant_id
-            )
-            return None
-        except Exception as e:
-            logger.warning(
-                "MASS API error for tenant %s: %s", tenant_id, e
-            )
-            return None
+
+        last_error: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                async with aiohttp.ClientSession(
+                    timeout=self._timeout,
+                    connector=connector,
+                ) as session:
+                    async with session.get(
+                        url, headers=req_headers
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            return TenantConfig(
+                                tenant_id=tenant_id,
+                                priority=data.get(
+                                    "priority", self._defaults.priority
+                                ),
+                                qps_limit=data.get(
+                                    "qps_limit", self._defaults.qps_limit
+                                ),
+                                concurrent_limit=data.get(
+                                    "concurrent_limit",
+                                    self._defaults.concurrent_limit,
+                                ),
+                                kv_cache_block_quota=data.get(
+                                    "kv_cache_block_quota",
+                                    self._defaults.kv_cache_block_quota,
+                                ),
+                            )
+                        elif resp.status == 404:
+                            logger.info(
+                                "Tenant %s not found in MASS, using defaults.",
+                                tenant_id,
+                            )
+                            return self._make_default_config(tenant_id)
+                        else:
+                            logger.warning(
+                                "MASS API returned %d for tenant %s "
+                                "(attempt %d/%d)",
+                                resp.status,
+                                tenant_id,
+                                attempt + 1,
+                                max_retries + 1,
+                            )
+            except asyncio.TimeoutError:
+                last_error = asyncio.TimeoutError()
+                logger.warning(
+                    "MASS API timeout for tenant %s (attempt %d/%d)",
+                    tenant_id,
+                    attempt + 1,
+                    max_retries + 1,
+                )
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "MASS API error for tenant %s (attempt %d/%d): %s",
+                    tenant_id,
+                    attempt + 1,
+                    max_retries + 1,
+                    e,
+                )
+
+            # Exponential backoff before next retry
+            if attempt < max_retries:
+                await asyncio.sleep(0.1 * (2 ** attempt))
+
+        logger.warning(
+            "MASS API exhausted %d retries for tenant %s, last error: %s",
+            max_retries + 1,
+            tenant_id,
+            last_error,
+        )
+        return None
 
     def _alert_mass_unavailable(self, tenant_id: str) -> None:
         """Rate-limited alert when MASS is down."""
@@ -240,5 +268,14 @@ class MassApiClient:
         )
 
     def invalidate(self, tenant_id: str) -> None:
-        """Invalidate cache for a tenant. For webhook-triggered refresh."""
-        self._cache.pop(tenant_id, None)
+        """Invalidate cache for a tenant. For webhook-triggered refresh.
+
+        Instead of removing the entry (which loses the stale fallback),
+        we reset fetched_at to 0 so the next get_tenant_config() will
+        treat it as expired and re-fetch from MASS, while still keeping
+        the stale value available if MASS is unreachable.
+        """
+        entry = self._cache.get(tenant_id)
+        if entry is not None:
+            entry.fetched_at = 0.0
+            entry.is_stale = True

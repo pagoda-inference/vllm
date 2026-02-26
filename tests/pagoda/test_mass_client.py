@@ -161,14 +161,40 @@ class TestMassApiClient:
 
         assert result is None
 
-    def test_invalidate_clears_cache(self):
-        """invalidate() removes tenant from cache."""
+    def test_invalidate_marks_stale_instead_of_deleting(self):
+        """invalidate() sets fetched_at=0 and is_stale=True, keeps entry."""
         self.client._cache["t1"] = CacheEntry(
             config=_make_defaults(), fetched_at=time.time(),
         )
-        assert "t1" in self.client._cache
         self.client.invalidate("t1")
-        assert "t1" not in self.client._cache
+        assert "t1" in self.client._cache
+        entry = self.client._cache["t1"]
+        assert entry.fetched_at == 0.0
+        assert entry.is_stale is True
+
+    @pytest.mark.asyncio
+    async def test_invalidate_triggers_refetch_on_next_get(self):
+        """After invalidate(), next get_tenant_config re-fetches from MASS."""
+        cached = TenantConfig(
+            tenant_id="t1", priority="normal",
+            qps_limit=10.0, concurrent_limit=5, kv_cache_block_quota=100,
+        )
+        self.client._cache["t1"] = CacheEntry(
+            config=cached, fetched_at=time.time(),
+        )
+        self.client.invalidate("t1")
+
+        new_config = TenantConfig(
+            tenant_id="t1", priority="high",
+            qps_limit=50.0, concurrent_limit=20, kv_cache_block_quota=500,
+        )
+        with patch.object(
+            self.client, "_fetch_from_mass", new_callable=AsyncMock,
+            return_value=new_config,
+        ) as mock_fetch:
+            result = await self.client.get_tenant_config("t1")
+            mock_fetch.assert_called_once()
+        assert result is new_config
 
     def test_invalidate_nonexistent_no_error(self):
         """invalidate() on missing tenant doesn't raise."""
@@ -189,6 +215,62 @@ class TestMassApiClient:
             result = await self.client.get_tenant_config("t1")
         assert result is new_config
         assert "t1" in self.client._cache
+
+    @pytest.mark.asyncio
+    async def test_fetch_retries_on_500(self):
+        """_fetch_from_mass retries on non-200/404 responses."""
+        ok_resp = AsyncMock()
+        ok_resp.status = 200
+        ok_resp.json = AsyncMock(return_value={
+            "priority": "high",
+            "qps_limit": 50.0,
+            "concurrent_limit": 20,
+            "kv_cache_block_quota": 500,
+        })
+        fail_resp = AsyncMock()
+        fail_resp.status = 500
+
+        mock_session = AsyncMock()
+        # First call fails with 500, second succeeds
+        mock_session.get.return_value.__aenter__ = AsyncMock(
+            side_effect=[fail_resp, ok_resp]
+        )
+        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("aiohttp.ClientSession") as mock_cls, \
+             patch("asyncio.sleep", new_callable=AsyncMock):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=mock_session
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await self.client._fetch_from_mass("t1", max_retries=1)
+
+        # Should have retried and succeeded
+        assert result is not None
+        assert result.priority == "high"
+
+    @pytest.mark.asyncio
+    async def test_fetch_exhausts_retries_returns_none(self):
+        """_fetch_from_mass returns None after exhausting all retries."""
+        mock_resp = AsyncMock()
+        mock_resp.status = 500
+        mock_session = AsyncMock()
+        mock_session.get.return_value.__aenter__ = AsyncMock(
+            return_value=mock_resp
+        )
+        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("aiohttp.ClientSession") as mock_cls, \
+             patch("asyncio.sleep", new_callable=AsyncMock):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=mock_session
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await self.client._fetch_from_mass(
+                "t1", max_retries=2
+            )
+
+        assert result is None
 
 
 if __name__ == "__main__":
