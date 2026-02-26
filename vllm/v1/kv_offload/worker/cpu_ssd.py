@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import asyncio
+import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import aiofiles
@@ -18,12 +19,16 @@ from vllm.v1.kv_offload.worker.worker import (
 
 logger = init_logger(__name__)
 
+# Default timeout for waiting on async IO transfers (seconds)
+_DEFAULT_IO_TIMEOUT_SECONDS = 30.0
+
 
 @dataclass
 class AsyncTransfer:
     job_id: int
     num_bytes: int
     task: asyncio.Task
+    start_time: float = field(default_factory=time.monotonic)
 
 
 class CPUToSSDOffloadingHandler(OffloadingHandler):
@@ -38,6 +43,7 @@ class CPUToSSDOffloadingHandler(OffloadingHandler):
         self,
         cpu_tensors: list[torch.Tensor],
         block_size_bytes: int,
+        io_timeout_seconds: float = _DEFAULT_IO_TIMEOUT_SECONDS,
     ):
         """
         Initialize CPU to SSD offloading handler.
@@ -45,9 +51,11 @@ class CPUToSSDOffloadingHandler(OffloadingHandler):
         Args:
             cpu_tensors: List of CPU tensors (pinned memory) to transfer.
             block_size_bytes: Size of each block in bytes.
+            io_timeout_seconds: Timeout for individual IO wait operations.
         """
         self.cpu_tensors = cpu_tensors
         self.block_size_bytes = block_size_bytes
+        self.io_timeout_seconds = io_timeout_seconds
         self.total_block_size_bytes = sum(
             tensor.element_size() * tensor.stride(0)
             for tensor in cpu_tensors
@@ -119,16 +127,23 @@ class CPUToSSDOffloadingHandler(OffloadingHandler):
     ):
         """Store blocks from CPU to SSD."""
         for cpu_block_id, file_path in zip(cpu_spec.block_ids, ssd_spec.file_paths):
-            # Read data from CPU tensor
-            data_chunks = []
-            for tensor in self.cpu_tensors:
-                block_data = tensor[cpu_block_id]
-                data_chunks.append(block_data.cpu().numpy().tobytes())
+            try:
+                # Read data from CPU tensor
+                data_chunks = []
+                for tensor in self.cpu_tensors:
+                    block_data = tensor[cpu_block_id]
+                    data_chunks.append(block_data.cpu().numpy().tobytes())
 
-            # Write to SSD file
-            async with aiofiles.open(file_path, 'wb') as f:
-                for chunk in data_chunks:
-                    await f.write(chunk)
+                # Write to SSD file
+                async with aiofiles.open(file_path, 'wb') as f:
+                    for chunk in data_chunks:
+                        await f.write(chunk)
+            except OSError as e:
+                logger.error(
+                    "Failed to write block %d to %s: %s",
+                    cpu_block_id, file_path, e,
+                )
+                raise
 
     async def _create_load_task(
         self,
@@ -142,17 +157,30 @@ class CPUToSSDOffloadingHandler(OffloadingHandler):
                 logger.error("SSD block file not found: %s", file_path)
                 raise FileNotFoundError(f"SSD block file not found: {file_path}")
 
-            # Read from SSD file
-            async with aiofiles.open(file_path, 'rb') as f:
-                for tensor in self.cpu_tensors:
-                    chunk_size = tensor.element_size() * tensor.stride(0)
-                    data = await f.read(chunk_size)
-                    # Copy data to CPU tensor
-                    tensor[cpu_block_id].copy_(
-                        torch.frombuffer(data, dtype=tensor.dtype).reshape(
-                            tensor[cpu_block_id].shape
+            try:
+                # Read from SSD file
+                async with aiofiles.open(file_path, 'rb') as f:
+                    for tensor in self.cpu_tensors:
+                        chunk_size = tensor.element_size() * tensor.stride(0)
+                        data = await f.read(chunk_size)
+                        if len(data) != chunk_size:
+                            raise IOError(
+                                f"Short read for block {cpu_block_id} from "
+                                f"{file_path}: expected {chunk_size} bytes, "
+                                f"got {len(data)}"
+                            )
+                        # Copy data to CPU tensor
+                        tensor[cpu_block_id].copy_(
+                            torch.frombuffer(data, dtype=tensor.dtype).reshape(
+                                tensor[cpu_block_id].shape
+                            )
                         )
-                    )
+            except OSError as e:
+                logger.error(
+                    "Failed to read block %d from %s: %s",
+                    cpu_block_id, file_path, e,
+                )
+                raise
 
     def get_finished(self) -> list[TransferResult]:
         """Check for completed transfers and return their results."""
@@ -160,6 +188,7 @@ class CPUToSSDOffloadingHandler(OffloadingHandler):
 
         while self._transfers and self._transfers[0].task.done():
             transfer = self._transfers.popleft()
+            elapsed = time.monotonic() - transfer.start_time
 
             try:
                 # Check if task completed successfully
@@ -177,7 +206,7 @@ class CPUToSSDOffloadingHandler(OffloadingHandler):
                 job_id=transfer.job_id,
                 success=success,
                 transfer_size=transfer.num_bytes,
-                transfer_time=0.0,  # TODO: Add timing if needed
+                transfer_time=elapsed,
                 transfer_type=("CPU", "SSD"),
             )
             results.append(result)
@@ -185,10 +214,23 @@ class CPUToSSDOffloadingHandler(OffloadingHandler):
         return results
 
     def wait(self, job_ids: set[int]):
-        """Wait for specific transfer jobs to complete."""
+        """Wait for specific transfer jobs to complete, with timeout."""
         loop = self._get_event_loop()
 
         for transfer in self._transfers:
             if transfer.job_id in job_ids:
                 if not transfer.task.done():
-                    loop.run_until_complete(transfer.task)
+                    try:
+                        loop.run_until_complete(
+                            asyncio.wait_for(
+                                asyncio.shield(transfer.task),
+                                timeout=self.io_timeout_seconds,
+                            )
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(
+                            "Transfer job %d timed out after %.1fs",
+                            transfer.job_id,
+                            self.io_timeout_seconds,
+                        )
+                        transfer.task.cancel()

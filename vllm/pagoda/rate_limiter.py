@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from vllm.logger import init_logger
 from vllm.pagoda.mass_client import MassApiClient
 from vllm.pagoda.metrics import pagoda_rate_limit_rejected_total
+from vllm.pagoda.tenant import sanitize_metric_label
 
 logger = init_logger(__name__)
 
@@ -96,7 +97,7 @@ class TenantRateLimiter:
         Returns RateLimitResult with allowed=True and semaphore_ref on success.
         The caller MUST call release() with the returned semaphore_ref.
         """
-        uid = user_id or ""
+        uid = sanitize_metric_label(user_id)
         async with self._lock:
             bucket = await self._get_or_create_bucket(tenant_id)
 

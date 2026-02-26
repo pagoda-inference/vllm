@@ -9,6 +9,14 @@ mass_api:
   timeout_seconds: 2
   tenant_config_ttl_seconds: 300      # Normal cache TTL: 5 minutes
   stale_cache_ttl_seconds: 3600       # Degraded cache TTL: max 1 hour stale data
+  # Authentication (also configurable via env vars):
+  #   PAGODA_MASS_API_KEY, PAGODA_MASS_CLIENT_CERT,
+  #   PAGODA_MASS_CLIENT_KEY, PAGODA_MASS_CA_CERT
+  auth:
+    # api_key: "your-bearer-token"          # or set PAGODA_MASS_API_KEY
+    # client_cert_path: "/path/to/cert.pem" # mTLS client cert
+    # client_key_path: "/path/to/key.pem"   # mTLS client key
+    # ca_cert_path: "/path/to/ca.pem"       # CA cert for server verification
 
 # Fallback defaults when MASS API has no config for a tenant
 defaults:

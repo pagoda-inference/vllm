@@ -93,11 +93,14 @@ class SSDBackend(Backend):
             try:
                 file_path.unlink()
             except Exception as e:
-                logger.warning(
-                    "Failed to delete SSD block file %s: %s",
+                logger.error(
+                    "Failed to delete SSD block file %s: %s. "
+                    "Block %d will NOT be reused to prevent corruption.",
                     file_path,
-                    e
+                    e,
+                    block.block_id,
                 )
+                return
         self.allocated_blocks_free_list.append(block.block_id)
 
     def get_load_store_spec(

@@ -82,12 +82,17 @@ class PagodaConfig:
 
         # Initialize MASS API client
         mass_cfg = raw.get("mass_api", {})
+        auth_cfg = mass_cfg.get("auth", {})
         self.mass_client = MassApiClient(
             mass_api_url=mass_cfg.get("url", "http://localhost:8080/api"),
             timeout_seconds=mass_cfg.get("timeout_seconds", 2),
             ttl_seconds=mass_cfg.get("tenant_config_ttl_seconds", 300),
             stale_ttl_seconds=mass_cfg.get("stale_cache_ttl_seconds", 3600),
             defaults=defaults,
+            api_key=auth_cfg.get("api_key"),
+            client_cert_path=auth_cfg.get("client_cert_path"),
+            client_key_path=auth_cfg.get("client_key_path"),
+            ca_cert_path=auth_cfg.get("ca_cert_path"),
         )
 
         logger.info("Loaded pagoda config from %s", config_path)

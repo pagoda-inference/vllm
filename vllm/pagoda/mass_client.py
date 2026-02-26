@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import ssl
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -50,12 +52,45 @@ class MassApiClient:
         ttl_seconds: int = 300,
         stale_ttl_seconds: int = 3600,
         defaults: TenantConfig | None = None,
+        api_key: str | None = None,
+        client_cert_path: str | None = None,
+        client_key_path: str | None = None,
+        ca_cert_path: str | None = None,
     ) -> None:
         self._mass_api_url = mass_api_url.rstrip("/")
         self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
         self._ttl = ttl_seconds
         self._stale_ttl = stale_ttl_seconds
         self._defaults = defaults
+
+        # Auth: Bearer token (prefer env var over config)
+        self._api_key = api_key or os.environ.get("PAGODA_MASS_API_KEY")
+
+        # Auth: mTLS client certificate
+        self._ssl_context: ssl.SSLContext | None = None
+        client_cert = client_cert_path or os.environ.get(
+            "PAGODA_MASS_CLIENT_CERT"
+        )
+        client_key = client_key_path or os.environ.get(
+            "PAGODA_MASS_CLIENT_KEY"
+        )
+        ca_cert = ca_cert_path or os.environ.get("PAGODA_MASS_CA_CERT")
+        if client_cert and client_key:
+            self._ssl_context = ssl.create_default_context(
+                purpose=ssl.Purpose.SERVER_AUTH,
+                cafile=ca_cert,
+            )
+            self._ssl_context.load_cert_chain(
+                certfile=client_cert, keyfile=client_key
+            )
+            logger.info("MASS API client mTLS enabled (cert=%s)", client_cert)
+        elif self._api_key:
+            logger.info("MASS API client Bearer token auth enabled")
+        else:
+            logger.warning(
+                "MASS API client has NO authentication configured. "
+                "Set PAGODA_MASS_API_KEY or configure mTLS certificates."
+            )
 
         self._cache: dict[str, CacheEntry] = {}
         self._lock = asyncio.Lock()
@@ -118,11 +153,21 @@ class MassApiClient:
         url = (
             f"{self._mass_api_url}/internal/tenants/{tenant_id}/config"
         )
+        req_headers: dict[str, str] = {}
+        if self._api_key:
+            req_headers["Authorization"] = f"Bearer {self._api_key}"
+
+        connector = (
+            aiohttp.TCPConnector(ssl=self._ssl_context)
+            if self._ssl_context
+            else None
+        )
         try:
             async with aiohttp.ClientSession(
-                timeout=self._timeout
+                timeout=self._timeout,
+                connector=connector,
             ) as session:
-                async with session.get(url) as resp:
+                async with session.get(url, headers=req_headers) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         return TenantConfig(

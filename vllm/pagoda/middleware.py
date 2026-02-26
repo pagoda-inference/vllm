@@ -26,7 +26,7 @@ from vllm.pagoda.request_logger import (
     PagodaRequestLogger,
     RequestTimer,
 )
-from vllm.pagoda.tenant import TenantResolver
+from vllm.pagoda.tenant import TenantResolver, sanitize_metric_label
 
 logger = init_logger(__name__)
 
@@ -76,7 +76,7 @@ class PagodaMiddleware:
         identity = self.tenant_resolver.resolve(headers)
         tenant_id = identity.tenant_id
         user_id = identity.user_id
-        uid = user_id or ""
+        uid = sanitize_metric_label(user_id)
 
         # Resolve tenant config (priority) from MASS
         tenant_priority_str: str | None = None
