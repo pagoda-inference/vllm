@@ -60,9 +60,14 @@ class TestQueueDepthTracker:
 
     def test_warn_threshold_triggers_log(self, caplog):
         """Exceeding warn_threshold logs a warning."""
+        # Ensure the logger propagates to caplog
+        import logging
+        logger = logging.getLogger("vllm.pagoda.queue_depth")
+        logger.propagate = True
+
         with patch("vllm.pagoda.queue_depth.pagoda_queue_depth_current"), \
              patch("vllm.pagoda.queue_depth.pagoda_queue_rejected_total"), \
-             caplog.at_level(logging.WARNING):
+             caplog.at_level(logging.WARNING, logger="vllm.pagoda.queue_depth"):
             # warn_pct=0.8, max_pending=5 → threshold = 4
             for _ in range(3):
                 self.tracker.acquire()
