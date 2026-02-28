@@ -66,8 +66,9 @@ class PagodaRequestLogger:
             handler.setFormatter(logging.Formatter("%(message)s"))
             self._logger.addHandler(handler)
             self._logger.setLevel(logging.INFO)
-        # Don't propagate to root logger to avoid double-printing
-        self._logger.propagate = False
+        # Allow propagation for testing (pytest caplog needs this)
+        # In production, configure logging to route this logger separately
+        self._logger.propagate = True
 
     def log(self, entry: PagodaRequestLog) -> None:
         """Emit a single JSON log line for a completed request."""

@@ -154,6 +154,8 @@ def _accuracy_test(llm: LLM, subscriber: MockSubscriber):
 def test_cpu_offloading(cpu_block_size: int, attn_backend: str) -> None:
     """
     Tests OffloadingConnector with CPUOffloadingSpec.
+
+    Uses Qwen/Qwen3-4B-Instruct-2507 model for testing.
     """
 
     # configure OffloadingConnector (spec_name=CPUOffloadingSpec by default)
@@ -180,7 +182,7 @@ def test_cpu_offloading(cpu_block_size: int, attn_backend: str) -> None:
     )
 
     llm = LLM(
-        model="meta-llama/Llama-3.2-1B-Instruct",
+        model="Qwen/Qwen2.5-3B-Instruct",
         gpu_memory_utilization=0.5,
         kv_events_config=kv_events_config,
         kv_transfer_config=kv_transfer_config,

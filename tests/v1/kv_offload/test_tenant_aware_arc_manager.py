@@ -149,7 +149,9 @@ class TestARCBehavior:
 
         # Touch block 1 (in B1) → target increases
         mgr.touch(to_hashes([1]))
-        assert ts.target_t1_size > initial_target
+        # Target should increase by at least delta (which is at least 1)
+        assert ts.target_t1_size >= initial_target + 1, \
+            f"Expected target >= {initial_target + 1}, got {ts.target_t1_size}"
 
     def test_ghost_list_b2_decreases_target(self):
         mgr = _make(num_blocks=2)
@@ -162,7 +164,7 @@ class TestARCBehavior:
         assert to_hashes([1])[0] in ts.t2
 
         # Evict block 1 from T2 → goes to B2
-        # Need to set target low so T2 is evicted
+        # Need to set target high so T2 is evicted
         ts.target_t1_size = 10  # high target → evict from T2
         mgr.prepare_store(to_hashes([3]), tenant_id="t1")
         mgr.complete_store(to_hashes([3]))
@@ -171,7 +173,9 @@ class TestARCBehavior:
         if to_hashes([1])[0] in ts.b2:
             before = ts.target_t1_size
             mgr.touch(to_hashes([1]))
-            assert ts.target_t1_size < before
+            # Target should decrease by at least delta (which is at least 1)
+            assert ts.target_t1_size <= before - 1, \
+                f"Expected target <= {before - 1}, got {ts.target_t1_size}"
 
     def test_ghost_lists_bounded(self):
         mgr = _make(num_blocks=2)

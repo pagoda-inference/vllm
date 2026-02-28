@@ -16,13 +16,13 @@ class TestMetricsDefined:
     def test_request_total(self):
         assert isinstance(m.pagoda_request_total, Counter)
         assert m.pagoda_request_total._labelnames == (
-            "tenant_id", "model", "status",
+            "tenant_id", "user_id", "model", "status",
         )
 
     def test_request_latency_seconds(self):
         assert isinstance(m.pagoda_request_latency_seconds, Histogram)
         assert m.pagoda_request_latency_seconds._labelnames == (
-            "tenant_id", "model",
+            "tenant_id", "user_id", "model",
         )
 
     def test_request_queue_wait_seconds(self):
@@ -34,7 +34,7 @@ class TestMetricsDefined:
     def test_request_rejected_total(self):
         assert isinstance(m.pagoda_request_rejected_total, Counter)
         assert m.pagoda_request_rejected_total._labelnames == (
-            "tenant_id", "reason",
+            "tenant_id", "user_id", "reason",
         )
 
     # --- Rate limiting ---

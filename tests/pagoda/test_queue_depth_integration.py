@@ -191,12 +191,16 @@ class TestQueueDepthIntegration:
 
         # First request: should succeed and release the slot
         cap1 = []
-        await mw(_make_scope(), AsyncMock(), lambda msg, c=cap1: c.append(msg))
+        async def send1(msg):
+            cap1.append(msg)
+        await mw(_make_scope(), AsyncMock(), send1)
         assert cap1[0]["status"] == 200
 
         # Second request: should also succeed (slot was freed)
         cap2 = []
-        await mw(_make_scope(), AsyncMock(), lambda msg, c=cap2: c.append(msg))
+        async def send2(msg):
+            cap2.append(msg)
+        await mw(_make_scope(), AsyncMock(), send2)
         assert cap2[0]["status"] == 200
 
 

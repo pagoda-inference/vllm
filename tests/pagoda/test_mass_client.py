@@ -121,11 +121,15 @@ class TestMassApiClient:
         """MASS 404 → _fetch_from_mass returns default config."""
         mock_resp = AsyncMock()
         mock_resp.status = 404
-        mock_session = AsyncMock()
-        mock_session.get.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("aiohttp.ClientSession") as mock_cls:
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_ctx)
+
+        with patch("vllm.pagoda.mass_client.aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await self.client._fetch_from_mass("unknown-tenant")
@@ -139,11 +143,15 @@ class TestMassApiClient:
         """Non-200/404 response → returns None (degradation)."""
         mock_resp = AsyncMock()
         mock_resp.status = 500
-        mock_session = AsyncMock()
-        mock_session.get.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("aiohttp.ClientSession") as mock_cls:
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_ctx)
+
+        with patch("vllm.pagoda.mass_client.aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await self.client._fetch_from_mass("t1")
@@ -153,7 +161,7 @@ class TestMassApiClient:
     @pytest.mark.asyncio
     async def test_timeout_returns_none(self):
         """Timeout → returns None (degradation)."""
-        with patch("aiohttp.ClientSession") as mock_cls:
+        with patch("vllm.pagoda.mass_client.aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value.__aenter__ = AsyncMock(
                 side_effect=asyncio.TimeoutError()
             )
@@ -230,14 +238,20 @@ class TestMassApiClient:
         fail_resp = AsyncMock()
         fail_resp.status = 500
 
+        # Create context managers for each call
+        fail_ctx = MagicMock()
+        fail_ctx.__aenter__ = AsyncMock(return_value=fail_resp)
+        fail_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        ok_ctx = MagicMock()
+        ok_ctx.__aenter__ = AsyncMock(return_value=ok_resp)
+        ok_ctx.__aexit__ = AsyncMock(return_value=False)
+
         mock_session = AsyncMock()
         # First call fails with 500, second succeeds
-        mock_session.get.return_value.__aenter__ = AsyncMock(
-            side_effect=[fail_resp, ok_resp]
-        )
-        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_session.get = MagicMock(side_effect=[fail_ctx, ok_ctx])
 
-        with patch("aiohttp.ClientSession") as mock_cls, \
+        with patch("vllm.pagoda.mass_client.aiohttp.ClientSession") as mock_cls, \
              patch("asyncio.sleep", new_callable=AsyncMock):
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
@@ -254,13 +268,15 @@ class TestMassApiClient:
         """_fetch_from_mass returns None after exhausting all retries."""
         mock_resp = AsyncMock()
         mock_resp.status = 500
-        mock_session = AsyncMock()
-        mock_session.get.return_value.__aenter__ = AsyncMock(
-            return_value=mock_resp
-        )
-        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("aiohttp.ClientSession") as mock_cls, \
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_ctx)
+
+        with patch("vllm.pagoda.mass_client.aiohttp.ClientSession") as mock_cls, \
              patch("asyncio.sleep", new_callable=AsyncMock):
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session

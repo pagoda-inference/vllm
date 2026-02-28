@@ -94,14 +94,14 @@ def test_length_bucket_count():
 @pytest.mark.parametrize(
     "input_tokens,expected_bucket",
     [
-        (10, 0),  # 10 * 4 = 40 -> bucket 0
-        (20, 0),  # 20 * 4 = 80 -> bucket 1, but capped at 64 boundary
-        (100, 1),  # 100 * 4 = 400 -> bucket 1
-        (200, 1),  # 200 * 2 = 400 -> bucket 1
-        (600, 2),  # 600 * 1 = 600 -> bucket 2
-        (1500, 2),  # 1500 * 1 = 1500 -> bucket 2
-        (3000, 3),  # 3000 * 0.5 = 1500 -> bucket 2, but input is > 2048
-        (5000, 3),  # 5000 * 0.5 = 2500 -> bucket 3
+        (10, 0),  # 10 * 4 = 40 -> bucket 0 (40 <= 64)
+        (20, 1),  # 20 * 4 = 80 -> bucket 1 (64 < 80 <= 256)
+        (100, 2),  # 100 * 4 = 400 -> bucket 2 (256 < 400 <= 1024)
+        (200, 2),  # 200 * 2 = 400 -> bucket 2 (256 < 400 <= 1024)
+        (600, 2),  # 600 * 1 = 600 -> bucket 2 (256 < 600 <= 1024)
+        (1500, 3),  # 1500 * 1 = 1500 -> bucket 3 (1024 < 1500 <= 4096)
+        (3000, 3),  # 3000 * 0.5 = 1500 -> bucket 3 (1024 < 1500 <= 4096)
+        (5000, 3),  # 5000 * 0.5 = 2500 -> bucket 3 (1024 < 2500 <= 4096)
     ],
 )
 def test_end_to_end_prediction_and_bucketing(input_tokens, expected_bucket):
@@ -114,9 +114,9 @@ def test_end_to_end_prediction_and_bucketing(input_tokens, expected_bucket):
 def test_similar_length_grouping():
     """Test that similar-length requests get grouped in same bucket."""
     # Requests with similar predicted lengths should be in same bucket
-    inputs_group_1 = [10, 15, 20]  # All should predict to bucket 0
-    inputs_group_2 = [200, 250, 300]  # All should predict to bucket 1
-    inputs_group_3 = [1000, 1200, 1500]  # All should predict to bucket 2
+    inputs_group_1 = [10, 12, 15]  # All predict to bucket 0 (40, 48, 60)
+    inputs_group_2 = [200, 220, 240]  # All predict to bucket 2 (400, 440, 480)
+    inputs_group_3 = [1200, 1300, 1400]  # All predict to bucket 3 (1200, 1300, 1400)
 
     for inputs in [inputs_group_1, inputs_group_2, inputs_group_3]:
         buckets = [

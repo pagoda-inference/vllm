@@ -19,7 +19,7 @@ class TestTenantResolver:
     def test_trust_upstream_with_header(self):
         """trust_upstream=True + X-Tenant-ID header → returns header value."""
         resolver = TenantResolver(trust_upstream=True)
-        headers = Headers(headers=[(b"x-tenant-id", b"acme-corp")])
+        headers = Headers([(b"x-tenant-id", b"acme-corp")])
         identity = resolver.resolve(headers)
         assert isinstance(identity, ResolvedIdentity)
         assert identity.tenant_id == "acme-corp"
@@ -28,7 +28,7 @@ class TestTenantResolver:
     def test_trust_upstream_without_header(self):
         """trust_upstream=True + no header → returns __default__."""
         resolver = TenantResolver(trust_upstream=True)
-        headers = Headers(headers=[])
+        headers = Headers([])
         identity = resolver.resolve(headers)
         assert identity.tenant_id == "__default__"
         assert identity.user_id is None
@@ -36,7 +36,7 @@ class TestTenantResolver:
     def test_no_trust_upstream_always_default(self):
         """trust_upstream=False → always returns __default__ even with header."""
         resolver = TenantResolver(trust_upstream=False)
-        headers = Headers(headers=[(b"x-tenant-id", b"acme-corp")])
+        headers = Headers([(b"x-tenant-id", b"acme-corp")])
         identity = resolver.resolve(headers)
         assert identity.tenant_id == "__default__"
         assert identity.user_id is None
@@ -44,20 +44,20 @@ class TestTenantResolver:
     def test_no_trust_upstream_no_header(self):
         """trust_upstream=False + no header → returns __default__."""
         resolver = TenantResolver(trust_upstream=False)
-        headers = Headers(headers=[])
+        headers = Headers([])
         identity = resolver.resolve(headers)
         assert identity.tenant_id == "__default__"
 
     def test_default_trust_upstream_is_true(self):
         """Default trust_upstream should be True."""
         resolver = TenantResolver()
-        headers = Headers(headers=[(b"x-tenant-id", b"tenant-x")])
+        headers = Headers([(b"x-tenant-id", b"tenant-x")])
         assert resolver.resolve(headers).tenant_id == "tenant-x"
 
     def test_user_id_extracted_from_header(self):
         """X-User-ID header is extracted when trust_upstream=True."""
         resolver = TenantResolver(trust_upstream=True)
-        headers = Headers(headers=[
+        headers = Headers([
             (b"x-tenant-id", b"acme"),
             (b"x-user-id", b"user-42"),
         ])
@@ -68,13 +68,13 @@ class TestTenantResolver:
     def test_user_id_none_when_missing(self):
         """Missing X-User-ID → user_id is None."""
         resolver = TenantResolver(trust_upstream=True)
-        headers = Headers(headers=[(b"x-tenant-id", b"acme")])
+        headers = Headers([(b"x-tenant-id", b"acme")])
         assert resolver.resolve(headers).user_id is None
 
     def test_user_id_none_when_no_trust(self):
         """trust_upstream=False → user_id is always None."""
         resolver = TenantResolver(trust_upstream=False)
-        headers = Headers(headers=[
+        headers = Headers([
             (b"x-tenant-id", b"acme"),
             (b"x-user-id", b"user-42"),
         ])
@@ -85,7 +85,7 @@ class TestTenantResolver:
     def test_empty_user_id_treated_as_none(self):
         """Empty X-User-ID header → user_id is None."""
         resolver = TenantResolver(trust_upstream=True)
-        headers = Headers(headers=[
+        headers = Headers([
             (b"x-tenant-id", b"acme"),
             (b"x-user-id", b""),
         ])
@@ -96,7 +96,7 @@ class TestTenantResolver:
         """X-User-ID exceeding max length → user_id is None."""
         resolver = TenantResolver(trust_upstream=True)
         long_id = "u" * (_MAX_ID_LENGTH + 1)
-        headers = Headers(headers=[
+        headers = Headers([
             (b"x-tenant-id", b"acme"),
             (b"x-user-id", long_id.encode()),
         ])
@@ -105,7 +105,7 @@ class TestTenantResolver:
     def test_user_id_rejected_when_invalid_chars(self):
         """X-User-ID with special characters → user_id is None."""
         resolver = TenantResolver(trust_upstream=True)
-        headers = Headers(headers=[
+        headers = Headers([
             (b"x-tenant-id", b"acme"),
             (b"x-user-id", b"user;DROP TABLE"),
         ])
@@ -115,7 +115,7 @@ class TestTenantResolver:
         """X-Tenant-ID exceeding max length → falls back to __default__."""
         resolver = TenantResolver(trust_upstream=True)
         long_id = "t" * (_MAX_ID_LENGTH + 1)
-        headers = Headers(headers=[
+        headers = Headers([
             (b"x-tenant-id", long_id.encode()),
         ])
         assert resolver.resolve(headers).tenant_id == "__default__"
@@ -123,7 +123,7 @@ class TestTenantResolver:
     def test_tenant_id_rejected_when_invalid_chars(self):
         """X-Tenant-ID with special characters → falls back to __default__."""
         resolver = TenantResolver(trust_upstream=True)
-        headers = Headers(headers=[
+        headers = Headers([
             (b"x-tenant-id", b"tenant\x00evil"),
         ])
         assert resolver.resolve(headers).tenant_id == "__default__"
@@ -131,7 +131,7 @@ class TestTenantResolver:
     def test_valid_ids_with_allowed_special_chars(self):
         """IDs with dots, underscores, colons, @ are accepted."""
         resolver = TenantResolver(trust_upstream=True)
-        headers = Headers(headers=[
+        headers = Headers([
             (b"x-tenant-id", b"org.acme_corp:prod"),
             (b"x-user-id", b"user@example.com"),
         ])

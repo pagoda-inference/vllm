@@ -55,7 +55,7 @@ class TestMassApiAuth:
         )
         mock_session.get.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("aiohttp.ClientSession") as mock_cls:
+        with patch("vllm.pagoda.mass_client.aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session,
             )
@@ -97,7 +97,7 @@ class TestMassApiAuth:
         )
         mock_session.get.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("aiohttp.ClientSession") as mock_cls:
+        with patch("vllm.pagoda.mass_client.aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session,
             )
@@ -189,23 +189,23 @@ class TestMassApiAuth:
         mock_session = AsyncMock()
         call_count = 0
 
-        async def mock_get_ctx(*args, **kwargs):
+        def mock_get_ctx(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             # Verify token on every call
             headers = kwargs.get("headers", {})
             assert headers.get("Authorization") == "Bearer retry-token", \
                 f"Missing auth header on attempt {call_count}"
-            ctx = AsyncMock()
+            ctx = MagicMock()
             ctx.__aenter__ = AsyncMock(
                 return_value=fail_resp if call_count == 1 else ok_resp,
             )
             ctx.__aexit__ = AsyncMock(return_value=False)
             return ctx
 
-        mock_session.get = mock_get_ctx
+        mock_session.get = MagicMock(side_effect=mock_get_ctx)
 
-        with patch("aiohttp.ClientSession") as mock_cls, \
+        with patch("vllm.pagoda.mass_client.aiohttp.ClientSession") as mock_cls, \
              patch("asyncio.sleep", new_callable=AsyncMock):
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session,

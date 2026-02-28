@@ -170,10 +170,11 @@ class CPUToSSDOffloadingHandler(OffloadingHandler):
                                 f"got {len(data)}"
                             )
                         # Copy data to CPU tensor
+                        # Use bytearray to create a writable copy of the buffer
                         tensor[cpu_block_id].copy_(
-                            torch.frombuffer(data, dtype=tensor.dtype).reshape(
-                                tensor[cpu_block_id].shape
-                            )
+                            torch.frombuffer(
+                                bytearray(data), dtype=tensor.dtype
+                            ).reshape(tensor[cpu_block_id].shape)
                         )
             except OSError as e:
                 logger.error(

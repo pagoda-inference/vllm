@@ -130,8 +130,8 @@ class TenantRateLimiter:
 
             # --- Concurrency semaphore ---
             sem_ref = bucket.semaphore
-            acquired = sem_ref._value > 0  # type: ignore[attr-defined]
-            if not acquired:
+            # Check if semaphore is available (_value > 0 means slots available)
+            if sem_ref._value <= 0:  # type: ignore[attr-defined]
                 pagoda_rate_limit_rejected_total.labels(
                     tenant_id=tenant_id, user_id=uid, reason="concurrent_limit"
                 ).inc()
@@ -144,8 +144,9 @@ class TenantRateLimiter:
 
             # Consume 1 QPS token
             bucket.tokens -= 1.0
-            # Acquire semaphore (non-blocking, we checked above)
-            sem_ref.acquire_nowait()
+            # Acquire semaphore synchronously (we're already in async context with lock)
+            # Since we checked _value > 0, this should succeed immediately
+            sem_ref._value -= 1  # type: ignore[attr-defined]
 
         return RateLimitResult(
             allowed=True,

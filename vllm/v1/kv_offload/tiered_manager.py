@@ -147,8 +147,10 @@ class TieredOffloadingManager(OffloadingManager):
                 )
                 self.cpu_target_t1 = max(self.cpu_target_t1 - delta, 0)
                 self.cpu_b2.move_to_end(bh)
-            elif bh in self.ssd_cache:
-                # Touch on SSD just refreshes LRU position
+
+            # SSD tier LRU touch (independent of CPU tier)
+            if bh in self.ssd_cache:
+                # Touch on SSD refreshes LRU position
                 self.ssd_cache.move_to_end(bh)
 
     def complete_load(self, block_hashes: Iterable[BlockHash]):

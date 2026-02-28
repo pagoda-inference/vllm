@@ -94,7 +94,7 @@ class TestMassDegradation:
             self.client._mass_healthy = True
             self.client._last_alert_time = 0.0
 
-            with patch("vllm.pagoda.mass_client.pagoda_mass_api_errors_total"):
+            with patch("vllm.pagoda.metrics.pagoda_mass_api_errors_total"):
                 config = await self.client.get_tenant_config("tenant-abc")
 
         # Client should now be marked unhealthy

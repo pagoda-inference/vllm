@@ -61,15 +61,18 @@ class TestQueueDepthTracker:
     def test_warn_threshold_triggers_log(self, caplog):
         """Exceeding warn_threshold logs a warning."""
         with patch("vllm.pagoda.queue_depth.pagoda_queue_depth_current"), \
-             patch("vllm.pagoda.queue_depth.pagoda_queue_rejected_total"):
+             patch("vllm.pagoda.queue_depth.pagoda_queue_rejected_total"), \
+             caplog.at_level(logging.WARNING):
             # warn_pct=0.8, max_pending=5 → threshold = 4
             for _ in range(3):
                 self.tracker.acquire()
             # 4th acquire crosses threshold (4 >= 4)
-            with caplog.at_level(logging.WARNING, logger="vllm.pagoda.queue_depth"):
-                self.tracker.acquire()
+            self.tracker.acquire()
+
+            # Check if warning was logged
             assert any("warning threshold" in r.message.lower()
-                       for r in caplog.records)
+                       for r in caplog.records), \
+                f"Expected warning log, got: {[r.message for r in caplog.records]}"
 
     def test_max_pending_property(self):
         """max_pending property returns configured value."""
