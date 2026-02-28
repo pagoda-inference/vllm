@@ -281,7 +281,9 @@ class TenantAwareARCOffloadingManager(OffloadingManager):
         for t in self.tenants.values():
             for b in [t.b1, t.b2]:
                 while len(b) > self.cache_capacity:
-                    b.popitem(last=False)
+                    bh, _ = b.popitem(last=False)
+                    # Remove from tenant mapping when evicted from ghost list
+                    self._block_tenant.pop(bh, None)
 
         if to_evict and self.events is not None:
             self.events.append(
@@ -496,7 +498,8 @@ class TenantAwareARCOffloadingManager(OffloadingManager):
         del eviction_t[bh]
         eviction_b[bh] = None
         self.backend.free(block)
-        self._block_tenant.pop(bh, None)
+        # NOTE: Do NOT remove from _block_tenant here - ghost blocks still
+        # need tenant tracking for ARC adaptation when touched
 
         # Record eviction metrics
         tier = self.backend.medium
