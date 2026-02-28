@@ -78,7 +78,8 @@ def _latency_test(llm: LLM, subscriber: MockSubscriber):
     total_cold_time = 0.0
     total_gpu_hit_time = 0.0
     total_cpu_hit_time = 0.0
-    prompt_token_ids = [0] * 10001
+    # Reduce prompt length to avoid OOM with gpu_memory_utilization=0.5
+    prompt_token_ids = [0] * 2048  # Reduced from 10001 to 2048
     for i in tqdm(range(num_tests), desc="Running tests"):
         prompt_token_ids[0] = i
         prompts = [TokensPrompt(prompt_token_ids=prompt_token_ids)]
